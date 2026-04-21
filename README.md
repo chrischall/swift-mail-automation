@@ -1,4 +1,4 @@
-# AppleMailKit
+# MailAutomation
 
 Swift library for driving Apple Mail.app on macOS. Wraps AppleScript (via
 `NSAppleScript`) for read/send/discovery operations, and uses Spotlight
@@ -12,14 +12,14 @@ dependency: `swift-log`.
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/chrischall/AppleMailKit.git", from: "0.1.0"),
+    .package(url: "https://github.com/chrischall/swift-mail-automation.git", from: "0.1.0"),
 ]
 ```
 
 ## Quickstart
 
 ```swift
-import AppleMailKit
+import MailAutomation
 
 let mail = MailService(runner: NSAppleScriptRunner())
 
@@ -92,7 +92,7 @@ ensure it's granted FDA.
 tests:
 
 ```swift
-import AppleMailKit
+import MailAutomation
 
 final class MyFakeRunner: AppleScriptRunner {
     var response = ""

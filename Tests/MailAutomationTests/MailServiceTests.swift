@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import AppleMailKit
+@testable import MailAutomation
 
 @Suite("MailService")
 struct MailServiceTests {

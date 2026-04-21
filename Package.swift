@@ -2,24 +2,24 @@
 import PackageDescription
 
 let package = Package(
-    name: "AppleMailKit",
+    name: "swift-mail-automation",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "AppleMailKit", targets: ["AppleMailKit"]),
+        .library(name: "MailAutomation", targets: ["MailAutomation"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
     ],
     targets: [
         .target(
-            name: "AppleMailKit",
+            name: "MailAutomation",
             dependencies: [
                 .product(name: "Logging", package: "swift-log"),
             ]
         ),
         .testTarget(
-            name: "AppleMailKitTests",
-            dependencies: ["AppleMailKit"]
+            name: "MailAutomationTests",
+            dependencies: ["MailAutomation"]
         ),
     ]
 )
