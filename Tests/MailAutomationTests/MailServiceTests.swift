@@ -161,4 +161,231 @@ struct MailServiceTests {
         #expect(src.contains("bcc recipient"))
         #expect(src.contains("bcc@b.com"))
     }
+
+    // ─── parseEmailLines edge cases ────────────────────────────────────────
+
+    @Test("parseEmailLines handles empty / whitespace-only input")
+    func parseEmpty() {
+        #expect(MailService.parseEmailLines("", defaultRead: false).isEmpty)
+        #expect(MailService.parseEmailLines("\n\n\n", defaultRead: false).isEmpty)
+    }
+
+    @Test("parseEmailLines preserves unicode")
+    func parseUnicode() {
+        let raw = "メッセージ 📧\tmio@ex.com\tWed\tINBOX\tGoogle\t本文\n"
+        let out = MailService.parseEmailLines(raw, defaultRead: false)
+        #expect(out.count == 1)
+        #expect(out[0].subject == "メッセージ 📧")
+        #expect(out[0].content == "本文")
+    }
+
+    @Test("parseEmailLines handles empty account name in mailbox composition")
+    func parseEmptyAccount() {
+        let raw = "Hi\tfrom@x\tdate\tINBOX\t\tbody\n"
+        let out = MailService.parseEmailLines(raw, defaultRead: false)
+        #expect(out.count == 1)
+        // When account is empty, mailbox falls back to just the folder
+        #expect(out[0].mailbox == "INBOX")
+    }
+
+    @Test("parseEmailLines treats unknown isRead values as false in search mode")
+    func parseUnknownIsRead() {
+        let raw = "Subj\tx@y\tdate\tINBOX\tGoogle\tgibberish\tbody\n"
+        let out = MailService.parseEmailLines(raw, defaultRead: true, includeReadField: true)
+        #expect(out.count == 1)
+        #expect(out[0].isRead == false)  // anything other than "true" → false
+    }
+
+    @Test("parseEmailLines returns records in source order")
+    func parseOrder() {
+        let raw = (1...3).map { "S\($0)\tfrom\td\tINBOX\tGoogle\tbody\($0)\n" }.joined()
+        let out = MailService.parseEmailLines(raw, defaultRead: false)
+        #expect(out.map(\.subject) == ["S1", "S2", "S3"])
+    }
+
+    // ─── getUnread — more edge cases ───────────────────────────────────────
+
+    @Test("getUnread caps the limit at 20 regardless of caller")
+    func getUnreadCapsLimit() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.getUnread(limit: 999)
+
+        // The script interpolates the cap into a `\u{2265} <N> then exit`
+        // clause — we check that N is 20 (the cap), not 999.
+        let src = runner.calls[0]
+        #expect(src.contains("\u{2265} 20"))
+        #expect(!src.contains("\u{2265} 999"))
+    }
+
+    @Test("getUnread scopes to a specific account when given")
+    func getUnreadScoped() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.getUnread(limit: 5, account: "Google")
+
+        let src = runner.calls[0]
+        #expect(src.contains("first account whose name is \"Google\""))
+    }
+
+    @Test("getUnread propagates runner errors")
+    func getUnreadPropagates() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queueError("Not authorized")
+        let svc = MailService(runner: runner)
+
+        await #expect(throws: AppleScriptError.self) {
+            _ = try await svc.getUnread()
+        }
+    }
+
+    // ─── search — backend selection ────────────────────────────────────────
+
+    @Test("search uses AppleScript when account is provided (Spotlight doesn't know accounts)")
+    func searchScopedUsesAppleScript() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        // Pass a Spotlight mock that would return something so we'd notice
+        // if it were called — here the runner is the only one that should
+        // fire.
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.search(
+            query: "invoice",
+            account: "Google",
+            mailbox: "INBOX"
+        )
+
+        #expect(runner.calls.count == 1)
+        #expect(runner.calls[0].contains("name is \"Google\""))
+    }
+
+    @Test("search forceBackend=.applescript ignores any Spotlight configuration")
+    func searchForcesAppleScript() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.search(query: "x", forceBackend: .applescript)
+
+        // AppleScript path should fire
+        #expect(runner.calls.count == 1)
+    }
+
+    @Test("search forceBackend=.spotlight never falls back to AppleScript when Spotlight returns empty")
+    func searchForcesSpotlight() async throws {
+        // Wire a MailService with no Spotlight backend (nil) — calling
+        // search(forceBackend: .spotlight) should return [] without
+        // touching the runner.
+        let runner = FakeAppleScriptRunner()
+        let svc = MailService(runner: runner, spotlight: nil)
+
+        let results = try await svc.search(
+            query: "invoice",
+            forceBackend: .spotlight
+        )
+
+        #expect(results.isEmpty)
+        #expect(runner.calls.isEmpty, "should never consult AppleScript when backend is forced to spotlight")
+    }
+
+    @Test("search sinceDaysAgo is embedded in the AppleScript")
+    func searchDateBound() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.search(query: "x", account: "iCloud", sinceDaysAgo: 45)
+
+        let src = runner.calls[0]
+        #expect(src.contains("45 * days"))
+    }
+
+    @Test("search escapes double-quotes in the query")
+    func searchEscapesQuery() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.search(query: "she said \"hi\"", account: "iCloud")
+
+        let src = runner.calls[0]
+        #expect(src.contains("\\\"hi\\\""))
+    }
+
+    // ─── listMailboxes — more cases ────────────────────────────────────────
+
+    @Test("listMailboxes propagates runner errors unchanged")
+    func listMailboxesPropagates() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queueError("account not found")
+        let svc = MailService(runner: runner)
+
+        await #expect(throws: AppleScriptError.self) {
+            _ = try await svc.listMailboxes(account: "Nonexistent")
+        }
+    }
+
+    @Test("listMailboxes filters out blank lines and trims whitespace")
+    func listMailboxesCleanup() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("INBOX\n   \n  Sent  \nDrafts\n\n")
+        let svc = MailService(runner: runner)
+
+        let boxes = try await svc.listMailboxes(account: "iCloud")
+
+        #expect(boxes == ["INBOX", "Sent", "Drafts"])
+    }
+
+    // ─── send — more escaping / error cases ────────────────────────────────
+
+    @Test("send escapes double-quotes in to/subject")
+    func sendEscapes() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("SENT")
+        let svc = MailService(runner: runner)
+
+        try await svc.send(
+            to: "weird\"addr@x.com",
+            subject: "Re: \"Hi\"",
+            body: "b"
+        )
+
+        let src = runner.calls[0]
+        #expect(src.contains("weird\\\"addr@x.com"))
+        #expect(src.contains("\\\"Hi\\\""))
+    }
+
+    @Test("send writes the body to a temp file so multi-line / quoted content survives")
+    func sendUsesTempFile() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("SENT")
+        let svc = MailService(runner: runner)
+
+        try await svc.send(
+            to: "a@b.com",
+            subject: "s",
+            body: "Line 1\nLine 2\n\"with quotes\""
+        )
+
+        let src = runner.calls[0]
+        // Script references the POSIX file path pattern, not inlined content
+        #expect(src.contains("POSIX file"))
+        #expect(src.contains("read file"))
+    }
+
+    @Test("send propagates runner errors")
+    func sendPropagates() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queueError("Mail not running")
+        let svc = MailService(runner: runner)
+
+        await #expect(throws: AppleScriptError.self) {
+            try await svc.send(to: "a@b.com", subject: "s", body: "b")
+        }
+    }
 }
