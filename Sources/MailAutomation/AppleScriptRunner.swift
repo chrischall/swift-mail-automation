@@ -12,6 +12,7 @@ public protocol AppleScriptRunner: Sendable {
     func run(source: String) async throws -> String
 }
 
+/// Errors surfaced by an `AppleScriptRunner` execution.
 public enum AppleScriptError: Error, Equatable, Sendable {
     /// The script executed but AppleScript itself signaled an error (e.g.
     /// application not running, permission denied). Message is from the

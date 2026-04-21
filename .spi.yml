@@ -1,0 +1,7 @@
+# Swift Package Index config — tells SPI how to generate DocC for us.
+# https://swiftpackageindex.com/SwiftPackageIndex/SPIManifest/documentation
+version: 1
+builder:
+  configs:
+    - documentation_targets: [MailAutomation]
+      platform: macos

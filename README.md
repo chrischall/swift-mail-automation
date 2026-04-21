@@ -1,10 +1,14 @@
 # MailAutomation
 
+[![CI](https://github.com/chrischall/swift-mail-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/chrischall/swift-mail-automation/actions/workflows/ci.yml)
+[![Swift](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fchrischall%2Fswift-mail-automation%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/chrischall/swift-mail-automation)
+[![Platforms](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fchrischall%2Fswift-mail-automation%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/chrischall/swift-mail-automation)
+
 Swift library for driving Apple Mail.app on macOS. Wraps AppleScript (via
 `NSAppleScript`) for read/send/discovery operations, and uses Spotlight
 (via `mdfind`) as a fast fallback path for content search.
 
-Platform: macOS 14+. Pure Swift 6 with strict concurrency. Single
+Platform: **macOS 14+**. Pure Swift 6 with strict concurrency. Single
 dependency: `swift-log`.
 
 ## Install
@@ -54,14 +58,52 @@ try await mail.send(
 )
 ```
 
+## API reference
+
+### `MailService`
+
+The main entry point. Construct once, reuse across calls. All methods
+are async and throw `AppleScriptError` or `MailServiceError`.
+
+| Method | Purpose |
+|---|---|
+| `listAccounts() -> [String]` | Discover Mail account names (`"iCloud"`, `"Google"`, …) |
+| `listMailboxes(account:) -> [String]` | Mailboxes inside an account |
+| `getUnread(limit:account:) -> [EmailMessage]` | Unread messages, optionally scoped |
+| `search(query:limit:account:mailbox:sinceDaysAgo:forceBackend:) -> [EmailMessage]` | Subject+body search, Spotlight-first with AppleScript fallback |
+| `send(to:subject:body:cc:bcc:)` | Compose + send a new message |
+
+### `SearchBackend`
+
+`search(forceBackend:)` accepts:
+- `.spotlight` — forces Spotlight regardless of scoping
+- `.applescript` — forces the AppleScript path (slower but knows read-state and mailbox)
+- `nil` (default) — Spotlight when unscoped and indexed; AppleScript otherwise
+
+### `EmailMessage`
+
+Value type returned from search / unread:
+
+```swift
+subject: String
+sender: String              // "Name <addr@example.com>"
+dateSent: String            // AppleScript date string
+content: String             // truncated body preview
+isRead: Bool                // false for unread; always true for Spotlight hits
+mailbox: String             // "account — mailbox"
+```
+
+### `AppleScriptRunner` / `NSAppleScriptRunner`
+
+Protocol + production impl. Inject a fake in unit tests (see below).
+
 ## Capabilities and limits
 
 **Supported:**
 - List accounts + mailboxes
 - Read unread mail (across accounts or scoped)
-- Subject + body search, date-bounded
-- Send with optional cc/bcc
-- Spotlight-backed fast search when indexed
+- Subject + body search, date-bounded, with Spotlight fast path
+- Send with optional cc/bcc, multi-line bodies, quoted content
 
 **Limits:**
 - Spotlight search requires `~/Library/Mail` to be indexed by the
@@ -72,6 +114,8 @@ try await mail.send(
   `account` + `mailbox` when possible.
 - No IMAP/SMTP — this is a local Mail.app wrapper, not a mail
   client library. For that, use MailCore2.
+- Spotlight results always report `isRead == true` because Spotlight
+  doesn't index read state.
 
 ## Permissions
 

@@ -1,7 +1,13 @@
 import Foundation
 
+/// Errors surfaced by `MailService` operations.
 public enum MailServiceError: Error, Equatable, Sendable {
+    /// AppleScript ran but Mail.app reported a non-success result, or the
+    /// returned payload couldn't be parsed. The string carries Mail's
+    /// response for debugging.
     case scriptFailure(String)
+    /// Caller passed empty / whitespace-only strings for a required
+    /// parameter (account name, subject, recipient, etc.).
     case invalidInput(String)
 }
 
@@ -37,6 +43,13 @@ public struct MailService: Sendable {
 
     // MARK: - Discovery
 
+    /// Returns the names of every account configured in Mail.app
+    /// (`"iCloud"`, `"Google"`, `"Work"`, …). Use these strings as the
+    /// `account` parameter to `listMailboxes`, `getUnread`, and `search`.
+    ///
+    /// - Returns: Account names in Mail.app's configured order.
+    /// - Throws: `AppleScriptError.runtime` if Mail is not running or
+    ///   Automation permission is denied.
     public func listAccounts() async throws -> [String] {
         let result = try await runner.run(source: """
         tell application "Mail"
@@ -55,6 +68,15 @@ public struct MailService: Sendable {
             .filter { !$0.isEmpty }
     }
 
+    /// Returns the mailbox names inside a given account. On Gmail this
+    /// includes every user label (not just INBOX/Sent/…); on iCloud/IMAP
+    /// it matches the folder hierarchy you'd see in Mail.app's sidebar.
+    ///
+    /// - Parameter account: Account name from `listAccounts()`. Must be
+    ///   non-empty.
+    /// - Throws: `MailServiceError.invalidInput` if `account` is empty
+    ///   or whitespace-only; `AppleScriptError.runtime` if the account
+    ///   doesn't exist in Mail.
     public func listMailboxes(account: String) async throws -> [String] {
         guard !account.trimmingCharacters(in: .whitespaces).isEmpty else {
             throw MailServiceError.invalidInput("account name required")
@@ -84,6 +106,16 @@ public struct MailService: Sendable {
 
     // MARK: - Unread
 
+    /// Reads unread messages in Mail.app. Iterates every mailbox (so on
+    /// Gmail-heavy setups this can take tens of seconds — pass `account`
+    /// to scope to one account and speed up considerably).
+    ///
+    /// - Parameters:
+    ///   - limit: Maximum messages to return. Internally capped at 20.
+    ///   - account: Optional account name from `listAccounts()` to scope
+    ///     the search. When `nil`, iterates all accounts.
+    /// - Returns: Messages in mailbox-iteration order (not strictly date-
+    ///   sorted). Each `EmailMessage` has `isRead == false`.
     public func getUnread(limit: Int = 10, account: String? = nil) async throws -> [EmailMessage] {
         let maxN = min(limit, 20)
         let accountClause: String
@@ -267,6 +299,21 @@ public struct MailService: Sendable {
 
     // MARK: - Send
 
+    /// Composes and sends a new message through Mail.app. The body is
+    /// written to a temp file and read back inside the AppleScript so
+    /// multi-line content and embedded quotes pass through verbatim
+    /// without manual escaping.
+    ///
+    /// - Parameters:
+    ///   - to: Primary recipient email. Required, non-empty.
+    ///   - subject: Subject line. Required, non-empty.
+    ///   - body: Body text (UTF-8, multi-line OK). Required, non-empty.
+    ///   - cc: Optional CC recipient.
+    ///   - bcc: Optional BCC recipient.
+    /// - Throws: `MailServiceError.invalidInput` when any required
+    ///   parameter is empty; `MailServiceError.scriptFailure` if Mail
+    ///   doesn't confirm the send; `AppleScriptError.runtime` for a
+    ///   permissions error or Mail not running.
     public func send(
         to: String, subject: String, body: String,
         cc: String? = nil, bcc: String? = nil

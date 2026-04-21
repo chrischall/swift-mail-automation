@@ -1,0 +1,46 @@
+name: Release
+
+# Fires on any v* tag push. Validates the tag builds cleanly on CI's
+# macOS runner, then creates a GitHub Release with auto-generated notes.
+# Libraries don't need a pre-built binary artifact — SwiftPM consumers
+# build from source — but the release entry surfaces release notes and
+# gives Swift Package Index a signal to re-index.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo xcode-select --switch /Applications/Xcode.app
+      - run: swift --version
+      - run: swift build -c release
+      - run: swift test
+
+  release:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            Install via SwiftPM:
+
+            ```swift
+            .package(url: "https://github.com/chrischall/swift-mail-automation.git", from: "${{ github.ref_name }}"),
+            ```
+
+            ```swift
+            import MailAutomation
+            ```
+
+            See [README](https://github.com/chrischall/swift-mail-automation#readme) for usage and limitations.
