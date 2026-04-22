@@ -1,12 +1,12 @@
 import Foundation
-import Testing
 @testable import MailAutomation
+import Testing
 
 @Suite("ISODate")
 struct ISODateTests {
     @Test("round-trips a UTC date through string→parse")
     func roundTrip() throws {
-        let original = Date(timeIntervalSince1970: 1_745_230_200)  // 2026-04-21T10:50:00Z
+        let original = Date(timeIntervalSince1970: 1_745_230_200) // 2026-04-21T10:50:00Z
         let s = ISODate.string(from: original)
         let parsed = try #require(ISODate.parse(s))
         #expect(abs(parsed.timeIntervalSince(original)) < 1)

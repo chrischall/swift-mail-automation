@@ -32,6 +32,17 @@ public struct EmailMessage: Equatable, Sendable {
     /// context without a second call.
     public let mailbox: String
 
+    /// Create an `EmailMessage`. Exposed so callers can construct fixtures
+    /// in tests; the library itself builds these from parsed AppleScript
+    /// or Spotlight output.
+    ///
+    /// - Parameters:
+    ///   - subject: Subject line.
+    ///   - sender: Formatted sender (`"Name <addr@example.com>"` or bare).
+    ///   - dateSent: Date string as rendered by the backend. See `dateSent`.
+    ///   - content: Body preview (may be empty).
+    ///   - isRead: Read-state flag. See `isRead` for backend semantics.
+    ///   - mailbox: `"account — mailbox"` context string.
     public init(
         subject: String, sender: String, dateSent: String,
         content: String, isRead: Bool, mailbox: String

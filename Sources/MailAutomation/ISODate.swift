@@ -23,20 +23,14 @@ public enum ISODate {
     }
 
     /// Parse an ISO string into a Date. Tries, in order:
-    ///   1. Full datetime with fractional seconds  (2026-04-21T10:00:00.123Z)
-    ///   2. Plain datetime                         (2026-04-21T10:00:00Z)
-    ///   3. Bare date                              (2026-04-21)
-    /// Returns nil when nothing matches.
+    ///   1. Full ISO 8601 datetime (with or without fractional seconds),
+    ///      e.g. `2026-04-21T10:00:00Z` or `2026-04-21T10:00:00.500Z`.
+    ///   2. Bare date in local time, e.g. `2026-04-21`.
+    ///
+    /// - Returns: The parsed date, or `nil` when the string matches neither.
     public static func parse(_ s: String) -> Date? {
-        // `Date.ISO8601FormatStyle` handles datetime variants.
         if let d = try? Date(s, strategy: .iso8601) { return d }
-        if let d = try? Date(
-            s, strategy: .iso8601.year().month().day()
-                .dateTimeSeparator(.standard)
-                .time(includingFractionalSeconds: true)
-                .timeZone(separator: .omitted)
-        ) { return d }
-        // Bare YYYY-MM-DD
+        // Fallback for bare `YYYY-MM-DD` — `.iso8601` requires a time part.
         let dateOnly = Date.ISO8601FormatStyle(
             dateSeparator: .dash, dateTimeSeparator: .standard,
             timeZone: .current

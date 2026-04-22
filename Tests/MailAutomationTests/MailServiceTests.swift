@@ -1,10 +1,9 @@
 import Foundation
-import Testing
 @testable import MailAutomation
+import Testing
 
 @Suite("MailService")
 struct MailServiceTests {
-
     // ─── parseEmailLines ───────────────────────────────────────────────────
 
     @Test("parseEmailLines parses 6-field unread format")
@@ -33,7 +32,7 @@ struct MailServiceTests {
     @Test("parseEmailLines fills defaults and skips malformed rows")
     func parseDefaults() {
         let raw = "short row\n"
-            + "ok\tsender\tdate\tbox\tacct\t\n"  // empty body → default placeholder
+            + "ok\tsender\tdate\tbox\tacct\t\n" // empty body → default placeholder
             + "\n"
         let out = MailService.parseEmailLines(raw, defaultRead: false)
         #expect(out.count == 1)
@@ -193,12 +192,12 @@ struct MailServiceTests {
         let raw = "Subj\tx@y\tdate\tINBOX\tGoogle\tgibberish\tbody\n"
         let out = MailService.parseEmailLines(raw, defaultRead: true, includeReadField: true)
         #expect(out.count == 1)
-        #expect(out[0].isRead == false)  // anything other than "true" → false
+        #expect(out[0].isRead == false) // anything other than "true" → false
     }
 
     @Test("parseEmailLines returns records in source order")
     func parseOrder() {
-        let raw = (1...3).map { "S\($0)\tfrom\td\tINBOX\tGoogle\tbody\($0)\n" }.joined()
+        let raw = (1 ... 3).map { "S\($0)\tfrom\td\tINBOX\tGoogle\tbody\($0)\n" }.joined()
         let out = MailService.parseEmailLines(raw, defaultRead: false)
         #expect(out.map(\.subject) == ["S1", "S2", "S3"])
     }
@@ -387,5 +386,125 @@ struct MailServiceTests {
         await #expect(throws: AppleScriptError.self) {
             try await svc.send(to: "a@b.com", subject: "s", body: "b")
         }
+    }
+
+    // ─── search — Spotlight-success path ───────────────────────────────────
+
+    /// Shared mdfind output used by the Spotlight-branch tests.
+    private static let mdfindOneHit = """
+    /U/me/Library/Mail/V10/A/INBOX.mbox/u/Data/0/Messages/1.emlx \
+    kMDItemSubject = "Invoice" \
+    kMDItemAuthors = ("billing@x.com") \
+    kMDItemContentCreationDate = 2026-04-01 00:00:00 +0000
+    """
+
+    @Test("search returns Spotlight hits without running AppleScript when unscoped and Spotlight has results")
+    func searchUsesSpotlightWhenAvailable() async throws {
+        let runner = FakeAppleScriptRunner()
+        let spotlight = SpotlightMailSearch(runner: { _ in Self.mdfindOneHit })
+        let svc = MailService(runner: runner, spotlight: spotlight)
+
+        let results = try await svc.search(query: "invoice")
+
+        #expect(results.count == 1)
+        #expect(results[0].subject == "Invoice")
+        #expect(runner.calls.isEmpty, "AppleScript should not run when Spotlight found a hit")
+    }
+
+    @Test("search falls back to AppleScript when Spotlight returns empty")
+    func searchFallsBackToAppleScriptOnEmptySpotlight() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("Fallback\tf@x.com\tWed\tINBOX\tGoogle\ttrue\tbody\n")
+        let spotlight = SpotlightMailSearch(runner: { _ in "" })
+        let svc = MailService(runner: runner, spotlight: spotlight)
+
+        let results = try await svc.search(query: "invoice")
+
+        #expect(runner.calls.count == 1, "AppleScript fallback must fire when Spotlight yields nothing")
+        #expect(results.count == 1)
+        #expect(results[0].subject == "Fallback")
+    }
+
+    @Test("search forceBackend=.spotlight returns Spotlight hits and skips AppleScript entirely")
+    func searchForcesSpotlightWithHits() async throws {
+        let runner = FakeAppleScriptRunner()
+        let spotlight = SpotlightMailSearch(runner: { _ in Self.mdfindOneHit })
+        let svc = MailService(runner: runner, spotlight: spotlight)
+
+        let results = try await svc.search(query: "invoice", forceBackend: .spotlight)
+
+        #expect(results.count == 1)
+        #expect(runner.calls.isEmpty)
+    }
+
+    // ─── getUnread — empty-string account coerces to unscoped ──────────────
+
+    @Test("getUnread treats an empty-string account the same as nil (all accounts)")
+    func getUnreadEmptyAccount() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.getUnread(limit: 5, account: "")
+
+        let src = runner.calls[0]
+        // Unscoped path sets `acctList to accounts`; scoped would embed a
+        // `first account whose name is "..."` clause.
+        #expect(src.contains("set acctList to accounts"))
+        #expect(!src.contains("first account whose name is"))
+    }
+
+    // ─── search — misc scope + arg plumbing ────────────────────────────────
+
+    @Test("search with only mailbox (no account) still bypasses Spotlight")
+    func searchMailboxOnlyBypassesSpotlight() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        // Spotlight would have returned a hit — but the mailbox-scope should
+        // force the AppleScript path, so Spotlight is never consulted.
+        let spotlight = SpotlightMailSearch(runner: { _ in Self.mdfindOneHit })
+        let svc = MailService(runner: runner, spotlight: spotlight)
+
+        _ = try await svc.search(query: "x", mailbox: "INBOX")
+
+        #expect(runner.calls.count == 1, "AppleScript must run when mailbox scope is set")
+    }
+
+    @Test("search escapes double-quotes in the account name")
+    func searchEscapesAccount() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.search(query: "q", account: "Work \"Tmp\"")
+
+        let src = runner.calls[0]
+        #expect(src.contains("\\\"Tmp\\\""))
+    }
+
+    @Test("search escapes double-quotes in the mailbox name")
+    func searchEscapesMailbox() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.search(query: "q", account: "Google", mailbox: "Weird \"Box\"")
+
+        let src = runner.calls[0]
+        #expect(src.contains("\\\"Box\\\""))
+    }
+
+    // ─── listMailboxes — escapes account quotes too ────────────────────────
+
+    @Test("listMailboxes escapes double-quotes in the account name")
+    func listMailboxesEscapes() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.listMailboxes(account: "Weird \"Name\"")
+
+        let src = runner.calls[0]
+        #expect(src.contains("\\\"Name\\\""))
     }
 }

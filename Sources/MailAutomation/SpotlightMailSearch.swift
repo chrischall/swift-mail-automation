@@ -14,21 +14,46 @@ import Logging
 public struct SpotlightMailSearch: Sendable {
     /// Abstraction over `Process` invocation so the search logic can be
     /// unit-tested without touching the file system.
+    ///
+    /// Implementations receive the argv that would normally be passed to
+    /// `mdfind` and return the captured stdout as a single string.
     public typealias Runner = @Sendable (_ args: [String]) async throws -> String
 
     private let runner: Runner
     private let log: Logger
 
+    /// Create a Spotlight-backed search.
+    ///
+    /// - Parameters:
+    ///   - runner: Process runner to invoke. Pass `nil` (the default) to
+    ///     spawn the real `/usr/bin/mdfind`. Inject a fake in tests.
+    ///   - log: Logger for debug tracing of generated predicates. When
+    ///     `nil`, a per-module logger is used.
     public init(runner: Runner? = nil, log: Logger? = nil) {
         self.runner = runner ?? SpotlightMailSearch.defaultRunner
-        // Library default: a per-module logger named after the package.
-        // Server wires its own `AppLog.root` in when it constructs us.
         self.log = log ?? Logger(label: "com.chall.apple-mail-kit.spotlight")
     }
 
-    /// Search mail by subject/body substring. Returns `.emlx` paths and a
-    /// small amount of indexed metadata — enough to present a result list
-    /// without re-parsing every file.
+    /// Search mail by subject/body substring via Spotlight.
+    ///
+    /// Hits `mdfind` against `~/Library/Mail/` with a predicate built from
+    /// `query` and an optional recency bound. Returns a small amount of
+    /// indexed metadata (subject, sender, date, mailbox derived from the
+    /// `.emlx` path) — enough to present a result list without re-parsing
+    /// every file. Body content and read status are not indexed by
+    /// Spotlight; `content` is always `""` and `isRead` is always `true`.
+    ///
+    /// - Parameters:
+    ///   - query: Substring to match (case-insensitive). Whitespace-only
+    ///     queries return `[]` without invoking the runner.
+    ///   - limit: Maximum number of results to return.
+    ///   - sinceDaysAgo: Optional date bound. `nil` or a non-positive value
+    ///     disables the bound. Defaults to 90 days.
+    /// - Returns: Parsed hits, in the order `mdfind` emitted them. Empty
+    ///   if the query is blank or `mdfind` returned nothing.
+    /// - Throws: Whatever the injected `Runner` throws — for the default
+    ///   runner, this is a `Foundation.Process` launch error (e.g. the
+    ///   binary is missing or can't be executed).
     public func search(
         query: String,
         limit: Int = 20,
@@ -69,7 +94,7 @@ public struct SpotlightMailSearch: Sendable {
         guard let days = sinceDaysAgo, days > 0 else { return text }
         // mdfind supports `$time.today(-30)` style but parses the `-` as
         // subtraction inside a compound predicate, so we use ISO dates.
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
         let iso = ISODate.string(from: cutoff)
         return "\(text) && (kMDItemContentCreationDate > \(formatMDFindDate(iso)))"
     }
@@ -83,7 +108,8 @@ public struct SpotlightMailSearch: Sendable {
 
     /// Parse `mdfind -attr a -attr b …` output. Format is one line per hit:
     ///
-    ///     /path/to/file.emlx kMDItemSubject = "Invoice" kMDItemAuthors = ("a@b.com") kMDItemContentCreationDate = 2026-04-01 09:00:00 +0000
+    ///     /path/to/file.emlx kMDItemSubject = "Invoice" kMDItemAuthors = ("a@b.com") kMDItemContentCreationDate =
+    /// 2026-04-01 09:00:00 +0000
     ///
     /// We use a pragmatic regex split rather than a full parser — attributes
     /// appear in the order we passed to `mdfind`.
@@ -161,23 +187,34 @@ public struct SpotlightMailSearch: Sendable {
 
     // ─── Default runner: spawn `mdfind` ────────────────────────────────────
 
-    private static let defaultRunner: Runner = { args in
-        try await withCheckedThrowingContinuation { cont in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
-            task.arguments = args
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = Pipe()
-            task.terminationHandler = { _ in
-                let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
-                let s = String(data: data ?? Data(), encoding: .utf8) ?? ""
-                cont.resume(returning: s)
-            }
-            do {
-                try task.run()
-            } catch {
-                cont.resume(throwing: error)
+    /// The `mdfind` binary path. Hard-coded because macOS always ships it
+    /// at this location and relying on `$PATH` would add an environment
+    /// dependency we don't need.
+    static let mdfindURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+
+    private static let defaultRunner: Runner = makeProcessRunner(executableURL: mdfindURL)
+
+    /// Build a `Runner` that spawns the given executable and collects its
+    /// stdout. Factored out so tests can point at a non-existent URL to
+    /// exercise the launch-error branch of `Process.run()`.
+    static func makeProcessRunner(executableURL: URL) -> Runner {
+        { args in
+            try await withCheckedThrowingContinuation { cont in
+                let task = Process()
+                task.executableURL = executableURL
+                task.arguments = args
+                let pipe = Pipe()
+                task.standardOutput = pipe
+                task.standardError = Pipe()
+                task.terminationHandler = { _ in
+                    let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+                    cont.resume(returning: String(data: data, encoding: .utf8) ?? "")
+                }
+                do {
+                    try task.run()
+                } catch {
+                    cont.resume(throwing: error)
+                }
             }
         }
     }

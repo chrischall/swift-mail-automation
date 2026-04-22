@@ -1,0 +1,24 @@
+# swiftformat config — matches repo house style.
+# Run:  swiftformat .
+# Lint: swiftformat . --lint
+
+--swiftversion 6.0
+--maxwidth 120
+
+# Prefer `case let .foo(x)` over `case .foo(let x)`.
+--patternlet hoist
+
+# Don't indent `#if` contents — standard Swift style keeps them flush left.
+--ifdef no-indent
+
+# Keep short property / function bodies on one line — cleaner for helpers
+# like `var nonEmpty: String? { isEmpty ? nil : self }` or tiny actor
+# mutators.
+--disable wrapPropertyBodies
+--disable wrapFunctionBodies
+
+# AppleScript embedded in multi-line string literals often exceeds maxwidth
+# and we can't reflow it without breaking the script. `wrap` also tries to
+# reflow string interpolations in ways that reduce readability — leave
+# that to the author.
+--disable wrap

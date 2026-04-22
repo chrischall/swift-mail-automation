@@ -15,14 +15,15 @@ final class FakeAppleScriptRunner: AppleScriptRunner, @unchecked Sendable {
         calls.append(source)
         let r = responses.isEmpty ? defaultResponse : responses.removeFirst()
         switch r {
-        case .success(let s): return s
-        case .failure(let e): throw e
+        case let .success(s): return s
+        case let .failure(e): throw e
         }
     }
 
     func queue(_ result: String) {
         responses.append(.success(result))
     }
+
     func queueError(_ msg: String) {
         responses.append(.failure(.runtime(msg)))
     }

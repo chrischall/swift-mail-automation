@@ -21,18 +21,32 @@ public enum SearchBackend: String, Sendable {
 
 /// Mail.app wrapper over `AppleScriptRunner`. Mail has no public Swift
 /// framework, so AppleScript is the only supported path — same performance
-/// ceiling as the Node port, just with no subprocess-spawn overhead.
+/// ceiling as a Node port, just without the per-call `osascript`
+/// subprocess overhead.
 ///
 /// Operations:
-/// - `unread`: read unread across all accounts (slow on Gmail-heavy setups)
-/// - `search`: subject substring, bounded by a date range (same whose()
-///   pattern we found 10× faster in the Node port)
-/// - `send`: create and send, with optional cc/bcc
-/// - `listAccounts` / `listMailboxes`: discovery
+/// - ``getUnread(limit:account:)`` — read unread, optionally scoped to one
+///   account (iterating all accounts is slow on Gmail-heavy setups).
+/// - ``search(query:limit:account:mailbox:sinceDaysAgo:forceBackend:)`` —
+///   substring search, date-bounded, with a Spotlight fast path.
+/// - ``send(to:subject:body:cc:bcc:)`` — compose + send.
+/// - ``listAccounts()`` / ``listMailboxes(account:)`` — discovery.
+///
+/// `MailService` is a value type and `Sendable`. Construct once, share
+/// across concurrent contexts freely.
 public struct MailService: Sendable {
     private let runner: any AppleScriptRunner
     private let spotlight: SpotlightMailSearch?
 
+    /// Create a `MailService`.
+    ///
+    /// - Parameters:
+    ///   - runner: AppleScript executor. In production, pass
+    ///     `NSAppleScriptRunner()`. Inject a fake for tests.
+    ///   - spotlight: Optional Spotlight-backed search used as a fast path
+    ///     for unscoped `search` calls. Pass `nil` to disable the fast
+    ///     path entirely (e.g. in sandboxed environments where `mdfind`
+    ///     can't read `~/Library/Mail`).
     public init(
         runner: any AppleScriptRunner,
         spotlight: SpotlightMailSearch? = SpotlightMailSearch()
@@ -171,16 +185,37 @@ public struct MailService: Sendable {
 
     // MARK: - Search
 
-    /// Search by subject/body substring.
+    /// Search by subject/body substring, using the fastest available
+    /// backend.
     ///
     /// Two backends, in priority order:
     ///   1. **Spotlight** (`mdfind`) — instant, searches subject+body across
-    ///      every .emlx on disk. Read status isn't indexed so results
-    ///      always show `isRead=true`. If `account` or `mailbox` is passed,
-    ///      we fall through to AppleScript instead since Spotlight doesn't
-    ///      know about Mail's account/mailbox grouping beyond the path.
-    ///   2. **AppleScript whose() with date bound** — slower but exposes
+    ///      every `.emlx` on disk. Read status isn't indexed so results
+    ///      always show `isRead == true`. Skipped when `account` or
+    ///      `mailbox` is passed, since Spotlight doesn't understand Mail's
+    ///      account/mailbox grouping beyond the on-disk path.
+    ///   2. **AppleScript `whose()` with date bound** — slower but exposes
     ///      account + mailbox scoping and real read status.
+    ///
+    /// - Parameters:
+    ///   - query: Substring to match against subject (AppleScript path)
+    ///     or subject+body (Spotlight). Whitespace-only returns `[]`.
+    ///   - limit: Maximum messages to return. Internally capped at 20 on
+    ///     the AppleScript path; Spotlight honors the limit directly.
+    ///   - account: Optional account scope. Setting this forces the
+    ///     AppleScript path.
+    ///   - mailbox: Optional mailbox scope. Ignored unless `account` is
+    ///     also set. Setting this forces the AppleScript path.
+    ///   - sinceDaysAgo: Lower bound on message date, in days. Defaults
+    ///     to 90.
+    ///   - forceBackend: Override the automatic backend selection. When
+    ///     `.spotlight` is forced and Spotlight yields nothing (or is not
+    ///     configured), returns `[]` without consulting AppleScript. When
+    ///     `.applescript` is forced, Spotlight is skipped entirely.
+    /// - Returns: Matching messages. Order is backend-defined (path order
+    ///   from `mdfind`, mailbox-iteration order from AppleScript).
+    /// - Throws: `AppleScriptError` or anything the Spotlight runner
+    ///   throws.
     public func search(
         query: String,
         limit: Int = 10,
@@ -320,7 +355,8 @@ public struct MailService: Sendable {
     ) async throws {
         guard !to.trimmingCharacters(in: .whitespaces).isEmpty,
               !subject.trimmingCharacters(in: .whitespaces).isEmpty,
-              !body.trimmingCharacters(in: .whitespaces).isEmpty else {
+              !body.trimmingCharacters(in: .whitespaces).isEmpty
+        else {
             throw MailServiceError.invalidInput("to, subject, and body are all required")
         }
         // File-based body to avoid AppleScript string-escaping hell for
@@ -331,10 +367,12 @@ public struct MailService: Sendable {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let esc: (String) -> String = { $0.replacingOccurrences(of: "\"", with: "\\\"") }
-        let ccLine = cc.flatMap { $0.isEmpty ? nil : $0 }.map {
+        let subjectQ = esc(subject)
+        let toQ = esc(to)
+        let ccLine = (cc?.nonEmpty).map {
             "make new cc recipient with properties {address:\"\(esc($0))\"}"
         } ?? ""
-        let bccLine = bcc.flatMap { $0.isEmpty ? nil : $0 }.map {
+        let bccLine = (bcc?.nonEmpty).map {
             "make new bcc recipient with properties {address:\"\(esc($0))\"}"
         } ?? ""
 
@@ -342,9 +380,9 @@ public struct MailService: Sendable {
         tell application "Mail"
             activate
             set emailBody to read file POSIX file "\(tmp.path)" as «class utf8»
-            set newMessage to make new outgoing message with properties {subject:"\(esc(subject))", content:emailBody, visible:false}
+            set newMessage to make new outgoing message with properties {subject:"\(subjectQ)", content:emailBody, visible:false}
             tell newMessage
-                make new to recipient with properties {address:"\(esc(to))"}
+                make new to recipient with properties {address:"\(toQ)"}
                 \(ccLine)
                 \(bccLine)
             end tell

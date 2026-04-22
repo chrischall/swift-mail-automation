@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 @testable import MailAutomation
+import Testing
 
 @Suite("SpotlightMailSearch")
 struct SpotlightMailSearchTests {
@@ -106,6 +106,89 @@ struct SpotlightMailSearchTests {
         #expect(msgs.isEmpty)
         let called = await box.called
         #expect(called == false)
+    }
+
+    @Test("search propagates errors thrown by the runner")
+    func searchPropagatesRunnerError() async throws {
+        struct Boom: Error {}
+        let runner: SpotlightMailSearch.Runner = { _ in throw Boom() }
+        let search = SpotlightMailSearch(runner: runner)
+
+        await #expect(throws: Boom.self) {
+            _ = try await search.search(query: "x")
+        }
+    }
+
+    @Test("buildPredicate omits the date bound when sinceDaysAgo is nil or <= 0")
+    func predicateNoDateBound() {
+        let pNil = SpotlightMailSearch.buildPredicate(query: "x", sinceDaysAgo: nil)
+        #expect(!pNil.contains("kMDItemContentCreationDate"))
+        let pZero = SpotlightMailSearch.buildPredicate(query: "x", sinceDaysAgo: 0)
+        #expect(!pZero.contains("kMDItemContentCreationDate"))
+        let pNeg = SpotlightMailSearch.buildPredicate(query: "x", sinceDaysAgo: -5)
+        #expect(!pNeg.contains("kMDItemContentCreationDate"))
+    }
+
+    @Test("mailboxFromPath returns empty when no .mbox ancestor is present")
+    func mailboxFromPathNoMbox() {
+        // Plausibly-shaped path but no `.mbox` component anywhere near Messages.
+        let s = SpotlightMailSearch.mailboxFromPath(
+            "/U/me/Library/Mail/V10/A/just/a/dir/Data/0/Messages/1.emlx"
+        )
+        #expect(s == "")
+    }
+
+    @Test("mailboxFromPath returns empty when there is no Messages folder at all")
+    func mailboxFromPathNoMessagesDir() {
+        #expect(SpotlightMailSearch.mailboxFromPath("/some/random/path.txt") == "")
+        #expect(SpotlightMailSearch.mailboxFromPath("") == "")
+    }
+
+    @Test("parseAttrOutput treats missing authors as (unknown)")
+    func parseMissingAuthors() {
+        let raw = "/p kMDItemSubject = \"Only subject\" kMDItemContentCreationDate = 2026-04-01\n"
+        let out = SpotlightMailSearch.parseAttrOutput(raw, limit: 10)
+        #expect(out.count == 1)
+        #expect(out[0].sender == "(unknown)")
+    }
+
+    @Test("parseAttrOutput takes the first author from a multi-author list")
+    func parseMultipleAuthors() {
+        let raw = "/p kMDItemSubject = \"Hi\" kMDItemAuthors = (\"a@x.com\", \"b@x.com\") kMDItemContentCreationDate = 2026-04-01\n"
+        let out = SpotlightMailSearch.parseAttrOutput(raw, limit: 10)
+        #expect(out.count == 1)
+        #expect(out[0].sender == "a@x.com")
+    }
+
+    @Test("formatMDFindDate wraps an ISO string in $time.iso(...)")
+    func formatMDFindDateWraps() {
+        let s = SpotlightMailSearch.formatMDFindDate("2026-04-21T00:00:00Z")
+        #expect(s == "$time.iso(2026-04-21T00:00:00Z)")
+    }
+
+    /// Exercises the real `/usr/bin/mdfind` subprocess path. macOS always
+    /// ships mdfind so this is safe on CI; we query for an improbable
+    /// needle and only assert it completes without throwing. The point is
+    /// coverage of the `defaultRunner` closure, not asserting on results.
+    @Test("default runner (mdfind subprocess) runs end-to-end")
+    func defaultRunnerExecutes() async throws {
+        let search = SpotlightMailSearch()
+        let results = try await search.search(
+            query: "ZZXXYY_MailAutomation_Unlikely_Needle_\(UUID().uuidString)",
+            limit: 1,
+            sinceDaysAgo: 1
+        )
+        #expect(results.isEmpty)
+    }
+
+    @Test("process runner throws when the executable can't be launched")
+    func processRunnerLaunchFailureThrows() async {
+        let runner = SpotlightMailSearch.makeProcessRunner(
+            executableURL: URL(fileURLWithPath: "/definitely/not/a/binary-\(UUID().uuidString)")
+        )
+        await #expect(throws: (any Error).self) {
+            _ = try await runner(["-help"])
+        }
     }
 }
 

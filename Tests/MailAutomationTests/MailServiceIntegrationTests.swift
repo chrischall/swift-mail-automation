@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 @testable import MailAutomation
+import Testing
 
 /// End-to-end tests against the user's real Mail.app.
 ///
@@ -31,7 +31,6 @@ import Testing
 /// ```
 @Suite("MailService integration")
 struct MailServiceIntegrationTests {
-
     private static let readOnlyEnabled =
         ProcessInfo.processInfo.environment["MAIL_AUTOMATION_INTEGRATION"] == "1"
 
@@ -92,8 +91,8 @@ struct MailServiceIntegrationTests {
     /// `[MailAutomation-SelfTest] <uuid>`.
     @Test("send dispatches through Mail.app and returns without error",
           .disabled(if: !(ProcessInfo.processInfo.environment["MAIL_AUTOMATION_INTEGRATION"] == "1"
-                       && (ProcessInfo.processInfo.environment["MAIL_AUTOMATION_SEND_TO"]?.isEmpty == false)),
-                    "set MAIL_AUTOMATION_INTEGRATION=1 and MAIL_AUTOMATION_SEND_TO=<your address>"))
+                        && (ProcessInfo.processInfo.environment["MAIL_AUTOMATION_SEND_TO"]?.isEmpty == false)),
+          "set MAIL_AUTOMATION_INTEGRATION=1 and MAIL_AUTOMATION_SEND_TO=<your address>"))
     func sendToSelf() async throws {
         guard let destination = Self.sendTo else {
             // Guard is redundant with the .disabled trait above but makes
