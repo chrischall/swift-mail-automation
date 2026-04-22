@@ -21,6 +21,4 @@ jobs:
       - name: Test
         run: swift test
       - name: SwiftFormat lint
-        run: |
-          brew install swiftformat
-          swiftformat Sources Tests --lint
+        run: swiftformat Sources Tests --lint
