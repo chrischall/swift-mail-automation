@@ -11,7 +11,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
       - name: Select Xcode
         run: sudo xcode-select --switch /Applications/Xcode.app
       - name: Swift version

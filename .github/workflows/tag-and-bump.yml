@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0 # need full tag history
           # PAT required — GITHUB_TOKEN pushes don't trigger release.yml
