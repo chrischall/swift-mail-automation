@@ -5,7 +5,7 @@ on:
   workflow_call: # reusable by tag-and-bump.yml and release.yml
 
 jobs:
-  test:
+  ci:
     runs-on: macos-15
     timeout-minutes: 10
     steps:
