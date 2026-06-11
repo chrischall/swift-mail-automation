@@ -2,12 +2,37 @@ name: CI
 
 on:
   pull_request:
+    # `labeled` so arming ready-to-merge / release-ready triggers the deferred run.
+    types: [opened, synchronize, reopened, labeled]
   workflow_call: # reusable by tag-and-bump.yml and release.yml
 
 jobs:
   ci:
     runs-on: macos-15
     timeout-minutes: 10
+    # CI is the LAST gate, not a parallel cost:
+    #   - normal (human) PRs: CI runs only once auto-review passes and arms
+    #     `ready-to-merge` — review findings get fixed without burning CI
+    #     runs; the label event fires the run, and pushes to an armed PR
+    #     re-run via synchronize (label still present).
+    #   - release-please PRs: deferred to the `release-ready` ship signal.
+    #   - BOT-authored PRs (dependabot): CI on EVERY event, unconditionally —
+    #     a label event must not gate them (curtaincall review #86: the
+    #     labeled-guard would have skipped a bot PR's run on any label touch) —
+    #     bots never receive auto-review, so they'd otherwise merge with CI
+    #     skipped (native auto-merge treats a skipped required check as
+    #     satisfied).
+    #   - workflow_call runs (no pull_request context) fall through unharmed.
+    if: |
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.user.type != 'User' ||
+      (
+        (github.event.action != 'labeled' || github.event.label.name == 'release-ready' || github.event.label.name == 'ready-to-merge') &&
+        (
+          (startsWith(github.event.pull_request.head.ref, 'release-please--') && contains(github.event.pull_request.labels.*.name, 'release-ready')) ||
+          (!startsWith(github.event.pull_request.head.ref, 'release-please--') && contains(github.event.pull_request.labels.*.name, 'ready-to-merge'))
+        )
+      )
     steps:
       - uses: actions/checkout@v6.0.2
       - name: Select Xcode
