@@ -3,6 +3,7 @@
 [![CI](https://github.com/chrischall/swift-mail-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/chrischall/swift-mail-automation/actions/workflows/ci.yml)
 [![Swift](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fchrischall%2Fswift-mail-automation%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/chrischall/swift-mail-automation)
 [![Platforms](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fchrischall%2Fswift-mail-automation%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/chrischall/swift-mail-automation)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Swift library for driving Apple Mail.app on macOS. Wraps AppleScript (via
 `NSAppleScript`) for read/send/discovery operations, and uses Spotlight
