@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/chrischall/swift-mail-automation/compare/v1.0.2...v1.0.3) (2026-06-13)
+
+
+### Documentation
+
+* add license badge to README ([#18](https://github.com/chrischall/swift-mail-automation/issues/18)) ([2c22c48](https://github.com/chrischall/swift-mail-automation/commit/2c22c4845cb1f95486a42ee4bdf192b21a030bc4))
+
 ## [1.0.2](https://github.com/chrischall/swift-mail-automation/compare/v1.0.1...v1.0.2) (2026-05-29)
 
 
