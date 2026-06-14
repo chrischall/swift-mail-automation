@@ -62,7 +62,7 @@ This is a **local Mail.app wrapper**, not a mail client. No IMAP/SMTP — every 
 
 **Coverage baseline:** The suite sits at ~98% line / ~90% region coverage. The remaining uncovered code is documented defensive fallbacks around Apple-API edge cases that can't be reliably provoked from tests (`NSAppleScript(source:)` returning nil, `errorInfo` without `errorMessage`/`errorBriefMessage` keys, lazy `log.debug { }` closures). Don't refactor production code to chase these — the fallbacks exist precisely because those edge cases are real but rare.
 
-<!-- pr-workflow:v1 -->
+<!-- pr-workflow:v2 -->
 ## Pull requests & release notes
 
 **Default workflow: branch + PR, even for solo work.** Direct pushes to `main` skip review *and* skip auto-generated release notes — GitHub's `generate_release_notes` (configured in `.github/release.yml`) only picks up merged PRs. Push directly to `main` only when the user explicitly asks for it (e.g. emergency hotfix).
@@ -82,6 +82,6 @@ For every PR, apply exactly one label so it lands in the right release-notes sec
 | *(none / unmatched)* | Other Changes            |
 | `ignore-for-release` | Hidden from notes        |
 
-The **PR title** becomes the bullet — write it like a user-facing changelog entry, not internal shorthand. Conventional-commit prefixes are still fine in commit messages, but the PR title should read clean.
+The **PR title MUST be a Conventional Commit**, written user-facing (`fix(scope): …`, `feat(scope): …`), not internal shorthand. Because the repo squash-merges, the PR title *becomes the squash commit's subject line* — the only thing release-please parses to pick the version bump and changelog section. Only `feat` (minor), `fix` (patch), and `!`/`BREAKING CHANGE` (major) cut a release; `perf`/`refactor`/`docs` show in the changelog without bumping; `ci`/`test`/`build`/`chore` are recognised but hidden (see `release-please-config.json` → `changelog-sections`). A title without a conventional type is invisible to release-please — no bump, no changelog line. Prefixes in *individual commits* don't help; squash keeps only the title.
 
-Open with `gh pr create --label <label>` (or `--label ignore-for-release` for chores not worth a line), then **immediately** run `gh pr merge <num> --auto --merge` so the PR merges as soon as CI passes. The repo allows merge commits only (no squash, no rebase) — don't pass `--squash`/`--rebase` or the call will fail.
+Open with `gh pr create --label <label>` (or `--label ignore-for-release` for chores not worth a line). **Don't run `gh pr merge` yourself** — leave merging to the user. The repo is **squash-only** (no merge commit, no rebase), so don't pass `--merge`/`--rebase`.
