@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.4](https://github.com/chrischall/swift-mail-automation/compare/v1.0.3...v1.0.4) (2026-06-21)
+
+
+### Documentation
+
+* add auto-review follow-up convention to CLAUDE.md ([#26](https://github.com/chrischall/swift-mail-automation/issues/26)) ([75f554d](https://github.com/chrischall/swift-mail-automation/commit/75f554d94bec1dd37d63455a276340cbd06802f6))
+* require Conventional Commit PR titles; correct squash-merge guidance ([#24](https://github.com/chrischall/swift-mail-automation/issues/24)) ([ecf5275](https://github.com/chrischall/swift-mail-automation/commit/ecf527591154dc82bc3b4b8fb52008dce8e669e7))
+
 ## [1.0.3](https://github.com/chrischall/swift-mail-automation/compare/v1.0.2...v1.0.3) (2026-06-13)
 
 
