@@ -34,7 +34,7 @@ jobs:
         )
       )
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7
       - name: Select Xcode
         run: sudo xcode-select --switch /Applications/Xcode.app
       - name: Swift version
