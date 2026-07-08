@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.5](https://github.com/chrischall/swift-mail-automation/compare/v1.0.4...v1.0.5) (2026-07-08)
+
+
+### Bug Fixes
+
+* **security:** escape backslashes in AppleScript and sanitize output fields ([#28](https://github.com/chrischall/swift-mail-automation/issues/28)) ([e20d78c](https://github.com/chrischall/swift-mail-automation/commit/e20d78cc90ee1c1c3ffdedafbad72e759d5ba603))
+
 ## [1.0.4](https://github.com/chrischall/swift-mail-automation/compare/v1.0.3...v1.0.4) (2026-06-21)
 
 
