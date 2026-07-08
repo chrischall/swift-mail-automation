@@ -95,7 +95,7 @@ public struct MailService: Sendable {
         guard !account.trimmingCharacters(in: .whitespaces).isEmpty else {
             throw MailServiceError.invalidInput("account name required")
         }
-        let esc = account.replacingOccurrences(of: "\"", with: "\\\"")
+        let esc = Self.escapeForAppleScript(account)
         let result = try await runner.run(source: """
         tell application "Mail"
             try
@@ -134,7 +134,7 @@ public struct MailService: Sendable {
         let maxN = min(limit, 20)
         let accountClause: String
         if let account, !account.isEmpty {
-            let esc = account.replacingOccurrences(of: "\"", with: "\\\"")
+            let esc = Self.escapeForAppleScript(account)
             accountClause = "set acctList to {first account whose name is \"\(esc)\"}"
         } else {
             accountClause = "set acctList to accounts"
@@ -163,7 +163,7 @@ public struct MailService: Sendable {
                                         set body to content of msg
                                         if (length of body) > 300 then set body to (text 1 thru 300 of body) & "..."
                                     end try
-                                    set out to out & subj & "\t" & sndr & "\t" & dateStr & "\t" & (name of m) & "\t" & acctName & "\t" & my sanitize(body) & linefeed
+                                    set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & (name of m) & "\t" & acctName & "\t" & my sanitize(body) & linefeed
                                     set found to found + 1
                                 end try
                             end repeat
@@ -258,13 +258,13 @@ public struct MailService: Sendable {
             return []
         }
         let maxN = min(limit, 20)
-        let escQuery = query.replacingOccurrences(of: "\"", with: "\\\"")
+        let escQuery = Self.escapeForAppleScript(query)
 
         let mailboxScope: String
         if let account, !account.isEmpty {
-            let ea = account.replacingOccurrences(of: "\"", with: "\\\"")
+            let ea = Self.escapeForAppleScript(account)
             if let mailbox, !mailbox.isEmpty {
-                let em = mailbox.replacingOccurrences(of: "\"", with: "\\\"")
+                let em = Self.escapeForAppleScript(mailbox)
                 mailboxScope = """
                 set targetAcct to first account whose name is "\(ea)"
                 set mbList to {first mailbox of targetAcct whose name is "\(em)"}
@@ -312,7 +312,7 @@ public struct MailService: Sendable {
                                 set body to content of msg
                                 if (length of body) > 300 then set body to (text 1 thru 300 of body) & "..."
                             end try
-                            set out to out & subj & "\t" & sndr & "\t" & dateStr & "\t" & (name of m) & "\t" & acctName & "\t" & (isRead as string) & "\t" & my sanitize(body) & linefeed
+                            set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & (name of m) & "\t" & acctName & "\t" & (isRead as string) & "\t" & my sanitize(body) & linefeed
                             set found to found + 1
                         end try
                     end repeat
@@ -366,7 +366,7 @@ public struct MailService: Sendable {
         try body.write(to: tmp, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let esc: (String) -> String = { $0.replacingOccurrences(of: "\"", with: "\\\"") }
+        let esc: (String) -> String = { Self.escapeForAppleScript($0) }
         let subjectQ = esc(subject)
         let toQ = esc(to)
         let ccLine = (cc?.nonEmpty).map {
@@ -394,6 +394,21 @@ public struct MailService: Sendable {
         guard result.trimmingCharacters(in: .whitespaces) == "SENT" else {
             throw MailServiceError.scriptFailure("Mail returned: \(result)")
         }
+    }
+
+    // MARK: - AppleScript escaping
+
+    /// Escapes a string for interpolation inside a double-quoted AppleScript
+    /// string literal. Backslashes are doubled *first*, then quotes are
+    /// escaped — so a value ending in `\` (or containing `\"`) can't break
+    /// out of the literal and execute as AppleScript. Same approach the
+    /// sibling swift-photos-automation kit uses.
+    ///
+    /// Exposed as `internal static` so tests can hit it directly.
+    static func escapeForAppleScript(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     // MARK: - Parse
