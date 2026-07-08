@@ -507,4 +507,135 @@ struct MailServiceTests {
         let src = runner.calls[0]
         #expect(src.contains("\\\"Name\\\""))
     }
+
+    // ─── Backslash escaping (AppleScript injection hardening) ──────────────
+    //
+    // A field ending in `\` — or containing `\"` — must not break out of the
+    // double-quoted AppleScript string literal. The escaper doubles
+    // backslashes *before* escaping quotes, so a trailing `\` becomes `\\`
+    // (an escaped backslash) rather than escaping the closing quote.
+
+    /// Single backslash, as its own constant to keep the byte-counting sane.
+    private static let bs = "\\"
+
+    @Test("escapeForAppleScript doubles backslashes before escaping quotes")
+    func escaperBackslashThenQuote() {
+        let bs = MailServiceTests.bs
+        let q = "\""
+        // Input `a\"b` (backslash then quote) → `a\\\"b`.
+        #expect(
+            MailService.escapeForAppleScript("a" + bs + q + "b")
+                == "a" + bs + bs + bs + q + "b"
+        )
+        // Trailing backslash doubles: `path\` → `path\\`.
+        #expect(MailService.escapeForAppleScript("path" + bs) == "path" + bs + bs)
+        // Plain quotes still escape: `say "hi"` → `say \"hi\"`.
+        #expect(
+            MailService.escapeForAppleScript("say " + q + "hi" + q)
+                == "say " + bs + q + "hi" + bs + q
+        )
+        // Plain text is untouched.
+        #expect(MailService.escapeForAppleScript("plain") == "plain")
+    }
+
+    @Test("send escapes a trailing backslash in the subject so it stays inside the literal")
+    func sendEscapesTrailingBackslash() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("SENT")
+        let svc = MailService(runner: runner)
+        let bs = MailServiceTests.bs
+
+        try await svc.send(to: "a@b.com", subject: "danger" + bs, body: "b")
+
+        let src = runner.calls[0]
+        // Correctly escaped: subject:"danger\\"  (doubled backslash, quote intact).
+        #expect(src.contains("subject:\"danger" + bs + bs + "\""))
+    }
+
+    @Test("send escapes backslash-then-quote in a recipient address")
+    func sendEscapesBackslashQuoteRecipient() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("SENT")
+        let svc = MailService(runner: runner)
+        let bs = MailServiceTests.bs
+
+        // to = a\"@b.com → escaped a\\\"@b.com
+        try await svc.send(to: "a" + bs + "\"@b.com", subject: "s", body: "b")
+
+        let src = runner.calls[0]
+        #expect(src.contains("a" + bs + bs + bs + "\"@b.com"))
+    }
+
+    @Test("search escapes a trailing backslash in the query")
+    func searchEscapesTrailingBackslash() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+        let bs = MailServiceTests.bs
+
+        _ = try await svc.search(query: "inv" + bs, account: "iCloud")
+
+        let src = runner.calls[0]
+        // subject contains "inv\\"  — doubled backslash keeps the literal closed.
+        #expect(src.contains("subject contains \"inv" + bs + bs + "\""))
+    }
+
+    @Test("getUnread escapes a trailing backslash in the account name")
+    func getUnreadEscapesTrailingBackslash() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+        let bs = MailServiceTests.bs
+
+        _ = try await svc.getUnread(account: "Acct" + bs)
+
+        let src = runner.calls[0]
+        #expect(src.contains("name is \"Acct" + bs + bs + "\""))
+    }
+
+    @Test("listMailboxes escapes a trailing backslash in the account name")
+    func listMailboxesEscapesTrailingBackslash() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+        let bs = MailServiceTests.bs
+
+        _ = try await svc.listMailboxes(account: "Acct" + bs)
+
+        let src = runner.calls[0]
+        #expect(src.contains("name is \"Acct" + bs + bs + "\""))
+    }
+
+    // ─── Output-field sanitization (tab/newline desync) ────────────────────
+    //
+    // subject and sender share the emitted `\t`-delimited record with body;
+    // a raw tab/newline in either would add stray fields/lines and desync
+    // parseEmailLines. They must run through the same `sanitize` helper as
+    // body before being emitted.
+
+    @Test("getUnread routes subject and sender through sanitize before emitting")
+    func getUnreadSanitizesSubjectAndSender() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.getUnread()
+
+        let src = runner.calls[0]
+        #expect(src.contains("my sanitize(subj)"))
+        #expect(src.contains("my sanitize(sndr)"))
+    }
+
+    @Test("search routes subject and sender through sanitize before emitting")
+    func searchSanitizesSubjectAndSender() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.search(query: "q", forceBackend: .applescript)
+
+        let src = runner.calls[0]
+        #expect(src.contains("my sanitize(subj)"))
+        #expect(src.contains("my sanitize(sndr)"))
+    }
 }
