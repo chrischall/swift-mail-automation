@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.6](https://github.com/chrischall/swift-mail-automation/compare/v1.0.5...v1.0.6) (2026-07-13)
+
+
+### Bug Fixes
+
+* sanitize mailbox/account names and distinguish cancelled CI runs ([#33](https://github.com/chrischall/swift-mail-automation/issues/33)) ([620a7ee](https://github.com/chrischall/swift-mail-automation/commit/620a7eeaed2d2ae8cc07c822e6915cde61974b25))
+
 ## [1.0.5](https://github.com/chrischall/swift-mail-automation/compare/v1.0.4...v1.0.5) (2026-07-08)
 
 
