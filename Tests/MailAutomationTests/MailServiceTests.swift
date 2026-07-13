@@ -204,7 +204,7 @@ struct MailServiceTests {
 
     // ─── getUnread — more edge cases ───────────────────────────────────────
 
-    @Test("getUnread caps the limit at 20 regardless of caller")
+    @Test("getUnread caps the limit at the safety ceiling regardless of caller")
     func getUnreadCapsLimit() async throws {
         let runner = FakeAppleScriptRunner()
         runner.queue("")
@@ -213,9 +213,10 @@ struct MailServiceTests {
         _ = try await svc.getUnread(limit: 999)
 
         // The script interpolates the cap into a `\u{2265} <N> then exit`
-        // clause — we check that N is 20 (the cap), not 999.
+        // clause — we check that N is the ceiling (100), not 999. Pages
+        // beyond the ceiling are reached via `offset`.
         let src = runner.calls[0]
-        #expect(src.contains("\u{2265} 20"))
+        #expect(src.contains("\u{2265} 100"))
         #expect(!src.contains("\u{2265} 999"))
     }
 

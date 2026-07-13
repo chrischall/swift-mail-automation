@@ -130,8 +130,13 @@ public struct MailService: Sendable {
     ///     the search. When `nil`, iterates all accounts.
     /// - Returns: Messages in mailbox-iteration order (not strictly date-
     ///   sorted). Each `EmailMessage` has `isRead == false`.
-    public func getUnread(limit: Int = 10, account: String? = nil) async throws -> [EmailMessage] {
-        let maxN = min(limit, 20)
+    public func getUnread(
+        limit: Int = 10,
+        account: String? = nil,
+        offset: Int = 0
+    ) async throws -> [EmailMessage] {
+        let maxN = Self.cappedLimit(limit)
+        let skip = max(0, offset)
         let accountClause: String
         if let account, !account.isEmpty {
             let esc = Self.escapeForAppleScript(account)
@@ -143,6 +148,7 @@ public struct MailService: Sendable {
         tell application "Mail"
             set out to ""
             set found to 0
+            set skipped to 0
             \(accountClause)
             repeat with a in acctList
                 if found \u{2265} \(maxN) then exit repeat
@@ -154,18 +160,26 @@ public struct MailService: Sendable {
                             set unreadMsgs to (messages of m whose read status is false)
                             repeat with msg in unreadMsgs
                                 if found \u{2265} \(maxN) then exit repeat
-                                try
-                                    set subj to subject of msg
-                                    set sndr to sender of msg
-                                    set dateStr to (date sent of msg) as string
-                                    set body to ""
+                                if skipped < \(skip) then
+                                    set skipped to skipped + 1
+                                else
                                     try
-                                        set body to content of msg
-                                        if (length of body) > 300 then set body to (text 1 thru 300 of body) & "..."
+                                        set subj to subject of msg
+                                        set sndr to sender of msg
+                                        set dateStr to (date sent of msg) as string
+                                        set mid to ""
+                                        try
+                                            set mid to message id of msg
+                                        end try
+                                        set body to ""
+                                        try
+                                            set body to content of msg
+                                            if (length of body) > \(Self.previewMaxLength) then set body to (text 1 thru \(Self.previewMaxLength) of body) & "..."
+                                        end try
+                                        set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & my sanitize(body) & "\t" & my sanitize(mid) & linefeed
+                                        set found to found + 1
                                     end try
-                                    set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & my sanitize(body) & linefeed
-                                    set found to found + 1
-                                end try
+                                end if
                             end repeat
                         end try
                     end repeat
@@ -222,6 +236,7 @@ public struct MailService: Sendable {
         account: String? = nil,
         mailbox: String? = nil,
         sinceDaysAgo: Int = 90,
+        offset: Int = 0,
         forceBackend: SearchBackend? = nil
     ) async throws -> [EmailMessage] {
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
@@ -236,7 +251,9 @@ public struct MailService: Sendable {
         // Account/mailbox scoping → skip Spotlight straight away, it
         // doesn't know about Mail's account/mailbox grouping beyond
         // what we parse from the file path.
-        let scoped = account?.isEmpty == false || mailbox?.isEmpty == false
+        // Spotlight can't scope by account/mailbox and can't page, so any of
+        // those forces the AppleScript path.
+        let scoped = account?.isEmpty == false || mailbox?.isEmpty == false || offset > 0
         let allowSpotlight: Bool = {
             if let forced = forceBackend { return forced == .spotlight }
             if scoped { return false }
@@ -257,7 +274,8 @@ public struct MailService: Sendable {
         if forceBackend == .spotlight {
             return []
         }
-        let maxN = min(limit, 20)
+        let maxN = Self.cappedLimit(limit)
+        let skip = max(0, offset)
         let escQuery = Self.escapeForAppleScript(query)
 
         let mailboxScope: String
@@ -291,6 +309,7 @@ public struct MailService: Sendable {
         tell application "Mail"
             set out to ""
             set found to 0
+            set skipped to 0
             \(mailboxScope)
             repeat with m in mbList
                 if found \u{2265} \(maxN) then exit repeat
@@ -302,19 +321,27 @@ public struct MailService: Sendable {
                     end try
                     repeat with msg in matchMsgs
                         if found \u{2265} \(maxN) then exit repeat
-                        try
-                            set subj to subject of msg
-                            set sndr to sender of msg
-                            set dateStr to (date sent of msg) as string
-                            set isRead to read status of msg
-                            set body to ""
+                        if skipped < \(skip) then
+                            set skipped to skipped + 1
+                        else
                             try
-                                set body to content of msg
-                                if (length of body) > 300 then set body to (text 1 thru 300 of body) & "..."
+                                set subj to subject of msg
+                                set sndr to sender of msg
+                                set dateStr to (date sent of msg) as string
+                                set isRead to read status of msg
+                                set mid to ""
+                                try
+                                    set mid to message id of msg
+                                end try
+                                set body to ""
+                                try
+                                    set body to content of msg
+                                    if (length of body) > \(Self.previewMaxLength) then set body to (text 1 thru \(Self.previewMaxLength) of body) & "..."
+                                end try
+                                set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & (isRead as string) & "\t" & my sanitize(body) & "\t" & my sanitize(mid) & linefeed
+                                set found to found + 1
                             end try
-                            set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & (isRead as string) & "\t" & my sanitize(body) & linefeed
-                            set found to found + 1
-                        end try
+                        end if
                     end repeat
                 end try
             end repeat
@@ -396,6 +423,127 @@ public struct MailService: Sendable {
         }
     }
 
+    // MARK: - Get full message
+
+    /// Field delimiter for ``getMessageScript(id:)`` output. ASCII record
+    /// separator (`U+001E`) — a full message body contains arbitrary
+    /// newlines and tabs, so the tab/newline scheme used by list/search
+    /// can't be reused here.
+    public static let detailFieldSeparator = "\u{001E}"
+
+    /// Preview-body cap for list/search snippets (``EmailMessage/content``).
+    /// A preview is scannable, not complete — use ``getMessage(id:account:)``
+    /// for the full body.
+    static let previewMaxLength = 300
+
+    /// Safety ceiling on list/search result counts. AppleScript is ~per-
+    /// message slow, so an unbounded limit could hang Mail; combine `limit`
+    /// with `offset` to page beyond this.
+    static func cappedLimit(_ limit: Int) -> Int { min(max(limit, 1), 100) }
+
+    /// Fetches a single message's **complete, untruncated** body by its RFC
+    /// `Message-ID` (as returned in ``EmailMessage/messageId`` from
+    /// ``getUnread(limit:account:offset:)`` / ``search(query:limit:account:mailbox:sinceDaysAgo:offset:forceBackend:)``).
+    ///
+    /// - Parameters:
+    ///   - id: The message's `Message-ID`. Empty/whitespace throws
+    ///     ``MailServiceError/invalidInput(_:)`` without running a script.
+    ///   - account: Optional account name to scope (and speed up) the
+    ///     lookup. When `nil`, every account's mailboxes are searched,
+    ///     which can be slow on large libraries.
+    /// - Returns: The message's full contents.
+    /// - Throws: ``MailServiceError/invalidInput(_:)`` for an empty id;
+    ///   ``MailServiceError/scriptFailure(_:)`` when no message with that
+    ///   id was found; `AppleScriptError` when Mail isn't running or
+    ///   Automation is denied.
+    public func getMessage(id: String, account: String? = nil) async throws -> MailMessageDetail {
+        guard !id.trimmingCharacters(in: .whitespaces).isEmpty else {
+            throw MailServiceError.invalidInput("message id required")
+        }
+        let raw = try await runner.run(source: Self.getMessageScript(id: id, account: account))
+        guard let detail = Self.parseMessageDetail(raw) else {
+            throw MailServiceError.scriptFailure(
+                "no message found with id \(id)"
+            )
+        }
+        return detail
+    }
+
+    /// Builds the get-message-by-id AppleScript. Emits seven
+    /// ``detailFieldSeparator``-delimited fields: messageId, subject,
+    /// sender, date, mailbox, account, isRead, and the full body last (it
+    /// can contain newlines/tabs).
+    static func getMessageScript(id: String, account: String? = nil) -> String {
+        let escId = escapeForAppleScript(id)
+        let scope: String
+        if let account, !account.isEmpty {
+            let ea = escapeForAppleScript(account)
+            scope = """
+            set mbList to mailboxes of (first account whose name is "\(ea)")
+            """
+        } else {
+            scope = """
+            set mbList to {}
+            repeat with a in accounts
+                try
+                    set mbList to mbList & mailboxes of a
+                end try
+            end repeat
+            """
+        }
+        return """
+        tell application "Mail"
+            set sep to (ASCII character 30)
+            \(scope)
+            repeat with m in mbList
+                try
+                    set hits to (messages of m whose message id is "\(escId)")
+                    if (count of hits) > 0 then
+                        set msg to item 1 of hits
+                        set acctName to ""
+                        try
+                            set acctName to name of (first account whose mailboxes contains m)
+                        end try
+                        set body to ""
+                        try
+                            set body to content of msg
+                        end try
+                        return (message id of msg) & sep & my ln(subject of msg) & sep & my ln(sender of msg) & sep & ((date sent of msg) as string) & sep & my ln(name of m) & sep & my ln(acctName) & sep & (read status of msg as string) & sep & body
+                    end if
+                end try
+            end repeat
+            return ""
+        end tell
+
+        on ln(s)
+            try
+                set s to do shell script "printf %s " & quoted form of s & " | tr '\\t\\n\\r' '   '"
+            end try
+            return s
+        end ln
+        """
+    }
+
+    /// Parses the record-separated output of ``getMessageScript(id:account:)``
+    /// into a ``MailMessageDetail``. The body (last field) is preserved
+    /// verbatim — newlines intact. Returns `nil` for an empty/short result.
+    static func parseMessageDetail(_ raw: String) -> MailMessageDetail? {
+        let sep = Character(detailFieldSeparator)
+        let fields = raw.split(separator: sep, omittingEmptySubsequences: false).map(String.init)
+        guard fields.count >= 8 else { return nil }
+        let body = fields[7...].joined(separator: detailFieldSeparator)
+        let mailbox = fields[5].isEmpty ? fields[4] : "\(fields[5]) — \(fields[4])"
+        return MailMessageDetail(
+            messageId: fields[0],
+            subject: fields[1],
+            sender: fields[2],
+            dateSent: fields[3],
+            mailbox: mailbox,
+            isRead: fields[6].lowercased() == "true",
+            body: body
+        )
+    }
+
     // MARK: - AppleScript escaping
 
     /// Escapes a string for interpolation inside a double-quoted AppleScript
@@ -429,12 +577,18 @@ public struct MailService: Sendable {
             guard fields.count >= needed else { return nil }
             let isRead: Bool
             let body: String
+            let messageId: String
             if includeReadField {
                 isRead = fields[5].lowercased() == "true"
                 body = fields[6]
+                // Optional trailing Message-ID (8-field format). Absent in
+                // the legacy 7-field format.
+                messageId = fields.count >= 8 ? fields[7] : ""
             } else {
                 isRead = defaultRead
                 body = fields[5]
+                // Optional trailing Message-ID (7-field format).
+                messageId = fields.count >= 7 ? fields[6] : ""
             }
             let mailbox = fields[4].isEmpty
                 ? fields[3]
@@ -445,7 +599,8 @@ public struct MailService: Sendable {
                 dateSent: fields[2],
                 content: body.isEmpty ? "[Content not available]" : body,
                 isRead: isRead,
-                mailbox: mailbox
+                mailbox: mailbox,
+                messageId: messageId
             )
         }
     }

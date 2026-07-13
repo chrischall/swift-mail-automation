@@ -70,9 +70,13 @@ are async and throw `AppleScriptError` or `MailServiceError`.
 |---|---|
 | `listAccounts() -> [String]` | Discover Mail account names (`"iCloud"`, `"Google"`, …) |
 | `listMailboxes(account:) -> [String]` | Mailboxes inside an account |
-| `getUnread(limit:account:) -> [EmailMessage]` | Unread messages, optionally scoped |
-| `search(query:limit:account:mailbox:sinceDaysAgo:forceBackend:) -> [EmailMessage]` | Subject+body search, Spotlight-first with AppleScript fallback |
+| `getUnread(limit:account:offset:) -> [EmailMessage]` | Unread messages, optionally scoped; `offset` pages beyond the 100 safety cap |
+| `search(query:limit:account:mailbox:sinceDaysAgo:offset:forceBackend:) -> [EmailMessage]` | Subject+body search, Spotlight-first with AppleScript fallback; `offset` for paging |
+| `getMessage(id:account:) -> MailMessageDetail` | One message's **complete, untruncated** body by its `messageId` |
 | `send(to:subject:body:cc:bcc:)` | Compose + send a new message |
+
+`getUnread`/`search` return a truncated `EmailMessage.content` preview plus
+a stable `messageId`; pass that id to `getMessage` for the full body.
 
 ### `SearchBackend`
 

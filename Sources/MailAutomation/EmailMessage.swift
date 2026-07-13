@@ -32,6 +32,13 @@ public struct EmailMessage: Equatable, Sendable {
     /// context without a second call.
     public let mailbox: String
 
+    /// The RFC 2822 `Message-ID` header — a stable, globally-unique handle
+    /// for the message. Pass it to ``MailService/getMessage(id:account:)``
+    /// to fetch the complete, untruncated body. Empty when the backend
+    /// didn't provide one (e.g. Spotlight results, or the legacy parse
+    /// format).
+    public let messageId: String
+
     /// Create an `EmailMessage`. Exposed so callers can construct fixtures
     /// in tests; the library itself builds these from parsed AppleScript
     /// or Spotlight output.
@@ -43,9 +50,11 @@ public struct EmailMessage: Equatable, Sendable {
     ///   - content: Body preview (may be empty).
     ///   - isRead: Read-state flag. See `isRead` for backend semantics.
     ///   - mailbox: `"account — mailbox"` context string.
+    ///   - messageId: RFC Message-ID, or `""` when unavailable.
     public init(
         subject: String, sender: String, dateSent: String,
-        content: String, isRead: Bool, mailbox: String
+        content: String, isRead: Bool, mailbox: String,
+        messageId: String = ""
     ) {
         self.subject = subject
         self.sender = sender
@@ -53,5 +62,36 @@ public struct EmailMessage: Equatable, Sendable {
         self.content = content
         self.isRead = isRead
         self.mailbox = mailbox
+        self.messageId = messageId
+    }
+}
+
+/// A single message's **complete** contents, returned by
+/// ``MailService/getMessage(id:account:)``.
+///
+/// Where ``EmailMessage/content`` is a ~300-char preview, ``body`` here is
+/// the message's full, untruncated plain-text body with newlines preserved.
+public struct MailMessageDetail: Equatable, Sendable {
+    public let messageId: String
+    public let subject: String
+    public let sender: String
+    public let dateSent: String
+    /// `"account — mailbox"` context string.
+    public let mailbox: String
+    public let isRead: Bool
+    /// The complete, untruncated body. Newlines preserved.
+    public let body: String
+
+    public init(
+        messageId: String, subject: String, sender: String, dateSent: String,
+        mailbox: String, isRead: Bool, body: String
+    ) {
+        self.messageId = messageId
+        self.subject = subject
+        self.sender = sender
+        self.dateSent = dateSent
+        self.mailbox = mailbox
+        self.isRead = isRead
+        self.body = body
     }
 }
