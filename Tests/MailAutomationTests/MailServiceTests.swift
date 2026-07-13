@@ -638,4 +638,35 @@ struct MailServiceTests {
         #expect(src.contains("my sanitize(subj)"))
         #expect(src.contains("my sanitize(sndr)"))
     }
+
+    // Mailbox and account names come straight from Mail.app's `name of m` /
+    // `name of a` and are just as user-renameable as subject/sender — a tab
+    // in either would desync parseEmailLines the same way. They must go
+    // through `sanitize` too, not just subject/sender/body.
+
+    @Test("getUnread routes mailbox and account name through sanitize before emitting")
+    func getUnreadSanitizesMailboxAndAccountName() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.getUnread()
+
+        let src = runner.calls[0]
+        #expect(src.contains("my sanitize(name of m)"))
+        #expect(src.contains("my sanitize(acctName)"))
+    }
+
+    @Test("search routes mailbox and account name through sanitize before emitting")
+    func searchSanitizesMailboxAndAccountName() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner)
+
+        _ = try await svc.search(query: "q", forceBackend: .applescript)
+
+        let src = runner.calls[0]
+        #expect(src.contains("my sanitize(name of m)"))
+        #expect(src.contains("my sanitize(acctName)"))
+    }
 }

@@ -57,7 +57,16 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: |
-          if [ "$JOB_STATUS" = "success" ]; then STATE=success; DESC="CI passed"; else STATE=failure; DESC="CI failed — see the ci job log"; fi
+          # job.status is one of success/failure/cancelled — a manual
+          # cancellation isn't a CI failure, so it gets its own commit
+          # status state+description instead of being lumped into "CI
+          # failed" (which would misleadingly send someone to the job log
+          # to debug a run nobody let finish).
+          case "$JOB_STATUS" in
+            success) STATE=success; DESC="CI passed" ;;
+            cancelled) STATE=error; DESC="CI cancelled" ;;
+            *) STATE=failure; DESC="CI failed — see the ci job log" ;;
+          esac
           gh api "repos/$REPO/statuses/$HEAD_SHA" \
             -f state="$STATE" -f context=ci-gated -f description="$DESC" >/dev/null
           echo "ci-gated → $STATE"

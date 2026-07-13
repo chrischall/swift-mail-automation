@@ -163,7 +163,7 @@ public struct MailService: Sendable {
                                         set body to content of msg
                                         if (length of body) > 300 then set body to (text 1 thru 300 of body) & "..."
                                     end try
-                                    set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & (name of m) & "\t" & acctName & "\t" & my sanitize(body) & linefeed
+                                    set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & my sanitize(body) & linefeed
                                     set found to found + 1
                                 end try
                             end repeat
@@ -312,7 +312,7 @@ public struct MailService: Sendable {
                                 set body to content of msg
                                 if (length of body) > 300 then set body to (text 1 thru 300 of body) & "..."
                             end try
-                            set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & (name of m) & "\t" & acctName & "\t" & (isRead as string) & "\t" & my sanitize(body) & linefeed
+                            set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & (isRead as string) & "\t" & my sanitize(body) & linefeed
                             set found to found + 1
                         end try
                     end repeat
