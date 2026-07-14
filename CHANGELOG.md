@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/chrischall/swift-mail-automation/compare/v1.0.6...v1.1.0) (2026-07-14)
+
+
+### Features
+
+* add full-message get, message ids, and offset pagination ([#35](https://github.com/chrischall/swift-mail-automation/issues/35)) ([32d7ec6](https://github.com/chrischall/swift-mail-automation/commit/32d7ec67b3c6b549f6e17ecc45be5739962ee3c9))
+
 ## [1.0.6](https://github.com/chrischall/swift-mail-automation/compare/v1.0.5...v1.0.6) (2026-07-13)
 
 
