@@ -35,14 +35,20 @@ public enum ISODate {
     /// - Returns: The parsed date, or `nil` when the string matches none.
     public static func parse(_ s: String) -> Date? {
         let withFractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-        if let d = try? Date(s, strategy: withFractional) { return d }
-        if let d = try? Date(s, strategy: .iso8601) { return d }
+        if let d = try? Date(s, strategy: withFractional) {
+            return d
+        }
+        if let d = try? Date(s, strategy: .iso8601) {
+            return d
+        }
         // Fallback for bare `YYYY-MM-DD` — `.iso8601` requires a time part.
         let dateOnly = Date.ISO8601FormatStyle(
             dateSeparator: .dash, dateTimeSeparator: .standard,
             timeZone: .current
         ).year().month().day()
-        if let d = try? Date(s, strategy: dateOnly) { return d }
+        if let d = try? Date(s, strategy: dateOnly) {
+            return d
+        }
         return nil
     }
 }

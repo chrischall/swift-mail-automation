@@ -116,7 +116,9 @@ public struct SpotlightMailSearch: Sendable {
     static func parseAttrOutput(_ raw: String, limit: Int) -> [EmailMessage] {
         var out: [EmailMessage] = []
         for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
-            if out.count >= limit { break }
+            if out.count >= limit {
+                break
+            }
             let s = String(line)
             guard let subjectRange = s.range(of: "kMDItemSubject = ") else { continue }
             let path = String(s[..<subjectRange.lowerBound]).trimmingCharacters(in: .whitespaces)

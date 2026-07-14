@@ -83,6 +83,23 @@ struct MailServiceIntegrationTests {
         }
     }
 
+    @Test("getMessage round-trips a message id from search into a full body",
+          .disabled(if: ProcessInfo.processInfo.environment["MAIL_AUTOMATION_INTEGRATION"] != "1",
+                    "set MAIL_AUTOMATION_INTEGRATION=1"))
+    func getMessageRoundTrips() async throws {
+        let svc = MailService(runner: NSAppleScriptRunner())
+        // Grab any recent message that carries a Message-ID, then fetch its
+        // full body by that id.
+        let recent = try await svc.getUnread(limit: 5)
+        guard let seed = recent.first(where: { !$0.messageId.isEmpty }) else {
+            return // no id-bearing message available on this machine; skip
+        }
+        let detail = try await svc.getMessage(id: seed.messageId)
+        #expect(detail.messageId == seed.messageId)
+        #expect(detail.subject == seed.subject)
+        #expect(!detail.mailbox.isEmpty)
+    }
+
     // MARK: - Send round-trip
 
     /// Send to an address the user explicitly opted in to via
