@@ -125,9 +125,13 @@ public struct MailService: Sendable {
     /// to scope to one account and speed up considerably).
     ///
     /// - Parameters:
-    ///   - limit: Maximum messages to return. Internally capped at 20.
+    ///   - limit: Maximum messages to return. Internally capped at 100;
+    ///     combine with `offset` to page beyond the cap. Non-positive
+    ///     values return `[]`.
     ///   - account: Optional account name from `listAccounts()` to scope
     ///     the search. When `nil`, iterates all accounts.
+    ///   - offset: Number of matching messages to skip before collecting
+    ///     results (in mailbox-iteration order). Defaults to 0.
     /// - Returns: Messages in mailbox-iteration order (not strictly date-
     ///   sorted). Each `EmailMessage` has `isRead == false`.
     public func getUnread(
@@ -135,6 +139,7 @@ public struct MailService: Sendable {
         account: String? = nil,
         offset: Int = 0
     ) async throws -> [EmailMessage] {
+        guard limit > 0 else { return [] }
         let maxN = Self.cappedLimit(limit)
         let skip = max(0, offset)
         let accountClause: String
@@ -174,7 +179,9 @@ public struct MailService: Sendable {
                                         set body to ""
                                         try
                                             set body to content of msg
-                                            if (length of body) > \(Self.previewMaxLength) then set body to (text 1 thru \(Self.previewMaxLength) of body) & "..."
+                                            if (length of body) > \(Self.previewMaxLength) then set body to (text 1 thru \(
+                                                Self.previewMaxLength
+                                            ) of body) & "..."
                                         end try
                                         set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & my sanitize(body) & "\t" & my sanitize(mid) & linefeed
                                         set found to found + 1
@@ -214,14 +221,19 @@ public struct MailService: Sendable {
     /// - Parameters:
     ///   - query: Substring to match against subject (AppleScript path)
     ///     or subject+body (Spotlight). Whitespace-only returns `[]`.
-    ///   - limit: Maximum messages to return. Internally capped at 20 on
-    ///     the AppleScript path; Spotlight honors the limit directly.
+    ///   - limit: Maximum messages to return. Internally capped at 100 on
+    ///     the AppleScript path (combine with `offset` to page beyond the
+    ///     cap); Spotlight honors the limit directly. Non-positive values
+    ///     return `[]`.
     ///   - account: Optional account scope. Setting this forces the
     ///     AppleScript path.
     ///   - mailbox: Optional mailbox scope. Ignored unless `account` is
     ///     also set. Setting this forces the AppleScript path.
     ///   - sinceDaysAgo: Lower bound on message date, in days. Defaults
     ///     to 90.
+    ///   - offset: Number of matching messages to skip before collecting
+    ///     results. Non-zero values force the AppleScript path (Spotlight
+    ///     can't page). Defaults to 0.
     ///   - forceBackend: Override the automatic backend selection. When
     ///     `.spotlight` is forced and Spotlight yields nothing (or is not
     ///     configured), returns `[]` without consulting AppleScript. When
@@ -239,6 +251,7 @@ public struct MailService: Sendable {
         offset: Int = 0,
         forceBackend: SearchBackend? = nil
     ) async throws -> [EmailMessage] {
+        guard limit > 0 else { return [] }
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
 
         // Pick backend. Spotlight is fast but depends on user system state
@@ -255,8 +268,12 @@ public struct MailService: Sendable {
         // those forces the AppleScript path.
         let scoped = account?.isEmpty == false || mailbox?.isEmpty == false || offset > 0
         let allowSpotlight: Bool = {
-            if let forced = forceBackend { return forced == .spotlight }
-            if scoped { return false }
+            if let forced = forceBackend {
+                return forced == .spotlight
+            }
+            if scoped {
+                return false
+            }
             return spotlight != nil
         }()
 
@@ -336,7 +353,9 @@ public struct MailService: Sendable {
                                 set body to ""
                                 try
                                     set body to content of msg
-                                    if (length of body) > \(Self.previewMaxLength) then set body to (text 1 thru \(Self.previewMaxLength) of body) & "..."
+                                    if (length of body) > \(Self.previewMaxLength) then set body to (text 1 thru \(
+                                        Self.previewMaxLength
+                                    ) of body) & "..."
                                 end try
                                 set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & (isRead as string) & "\t" & my sanitize(body) & "\t" & my sanitize(mid) & linefeed
                                 set found to found + 1
@@ -438,12 +457,14 @@ public struct MailService: Sendable {
 
     /// Safety ceiling on list/search result counts. AppleScript is ~per-
     /// message slow, so an unbounded limit could hang Mail; combine `limit`
-    /// with `offset` to page beyond this.
-    static func cappedLimit(_ limit: Int) -> Int { min(max(limit, 1), 100) }
+    /// with `offset` to page beyond this. Callers guard non-positive
+    /// limits (returning `[]`) before this is applied.
+    static func cappedLimit(_ limit: Int) -> Int { min(limit, 100) }
 
     /// Fetches a single message's **complete, untruncated** body by its RFC
     /// `Message-ID` (as returned in ``EmailMessage/messageId`` from
-    /// ``getUnread(limit:account:offset:)`` / ``search(query:limit:account:mailbox:sinceDaysAgo:offset:forceBackend:)``).
+    /// ``getUnread(limit:account:offset:)`` /
+    /// ``search(query:limit:account:mailbox:sinceDaysAgo:offset:forceBackend:)``).
     ///
     /// - Parameters:
     ///   - id: The message's `Message-ID`. Empty/whitespace throws

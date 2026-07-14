@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 @testable import MailAutomation
+import Testing
 
 /// Tests for the full-body read path and pagination added alongside the
 /// original preview-only surface: `messageId` on `EmailMessage`,
@@ -67,6 +67,14 @@ struct MailFullMessageTests {
     func getScriptEscapes() {
         let s = MailService.getMessageScript(id: "a\"b\\c")
         #expect(s.contains("a\\\"b\\\\c"))
+    }
+
+    @Test("getMessageScript scopes to one account when given, escaped")
+    func getScriptAccountScope() {
+        let s = MailService.getMessageScript(id: "<msg-1@x>", account: "Wo\"rk")
+        #expect(s.contains("mailboxes of (first account whose name is \"Wo\\\"rk\")"))
+        // Scoped scripts must not fall back to iterating every account.
+        #expect(!s.contains("repeat with a in accounts"))
     }
 
     @Test("parseMessageDetail preserves newlines in the full body")
@@ -149,5 +157,25 @@ struct MailFullMessageTests {
         let src = runner.calls[0]
         #expect(src.contains("message id of msg"))
         #expect(src.contains("7"))
+    }
+
+    // MARK: - non-positive limits
+
+    @Test("getUnread with a non-positive limit returns [] without a script", arguments: [0, -3])
+    func unreadNonPositiveLimit(limit: Int) async throws {
+        let runner = FakeAppleScriptRunner()
+        let svc = MailService(runner: runner, spotlight: nil)
+        let result = try await svc.getUnread(limit: limit)
+        #expect(result.isEmpty)
+        #expect(runner.calls.isEmpty)
+    }
+
+    @Test("search with a non-positive limit returns [] without a script", arguments: [0, -3])
+    func searchNonPositiveLimit(limit: Int) async throws {
+        let runner = FakeAppleScriptRunner()
+        let svc = MailService(runner: runner, spotlight: nil)
+        let result = try await svc.search(query: "invoice", limit: limit)
+        #expect(result.isEmpty)
+        #expect(runner.calls.isEmpty)
     }
 }
