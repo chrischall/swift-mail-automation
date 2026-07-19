@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/chrischall/swift-mail-automation/compare/v1.1.0...v1.1.1) (2026-07-19)
+
+
+### Documentation
+
+* replace duplicated fleet policy with a pointer ([#39](https://github.com/chrischall/swift-mail-automation/issues/39)) ([bc900da](https://github.com/chrischall/swift-mail-automation/commit/bc900da700978f94f31bdcc160410268c7478b03))
+
 ## [1.1.0](https://github.com/chrischall/swift-mail-automation/compare/v1.0.6...v1.1.0) (2026-07-14)
 
 
