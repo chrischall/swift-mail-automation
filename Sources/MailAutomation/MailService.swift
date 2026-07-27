@@ -490,10 +490,11 @@ public struct MailService: Sendable {
         return detail
     }
 
-    /// Builds the get-message-by-id AppleScript. Emits seven
+    /// Builds the get-message-by-id AppleScript. Emits eight
     /// ``detailFieldSeparator``-delimited fields: messageId, subject,
     /// sender, date, mailbox, account, isRead, and the full body last (it
-    /// can contain newlines/tabs).
+    /// can contain newlines/tabs, which is why the parser rejoins
+    /// `fields[7...]` rather than taking a single element).
     static func getMessageScript(id: String, account: String? = nil) -> String {
         let escId = escapeForAppleScript(id)
         let scope: String
