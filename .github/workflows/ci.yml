@@ -50,7 +50,15 @@ jobs:
       # `failure` (merge stays blocked, checks UI explains why) instead of
       # leaving a stale `pending`.
       - name: Report ci-gated status
-        if: always() && steps.gate.outputs.run == 'true' && github.event_name == 'pull_request'
+        # `steps.gate.outcome == 'failure'` matters as much as `run == 'true'`:
+        # a gate step that ERRORS (rather than deciding run=false) leaves `run`
+        # empty, which skips every step below it — including this one — so
+        # `ci-gated` keeps whatever it had and the required status never
+        # resolves. The job is already failed in that case, so the branch below
+        # posts `failure` without further help.
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          (steps.gate.outputs.run == 'true' || steps.gate.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
