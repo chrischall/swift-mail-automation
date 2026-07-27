@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/chrischall/swift-mail-automation/compare/v1.1.1...v1.1.2) (2026-07-27)
+
+
+### Documentation
+
+* getMessageScript emits eight fields, not seven ([#42](https://github.com/chrischall/swift-mail-automation/issues/42)) ([3522d3f](https://github.com/chrischall/swift-mail-automation/commit/3522d3fad62b22fafffad372b3bbb1e9760b4e8c))
+
 ## [1.1.1](https://github.com/chrischall/swift-mail-automation/compare/v1.1.0...v1.1.1) (2026-07-19)
 
 
