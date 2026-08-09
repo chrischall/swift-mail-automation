@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/chrischall/swift-mail-automation/compare/v1.1.2...v1.1.3) (2026-08-09)
+
+
+### Bug Fixes
+
+* run AppleScript on the main thread so cross-application scripts stop stalling ([#45](https://github.com/chrischall/swift-mail-automation/issues/45)) ([4cf7d73](https://github.com/chrischall/swift-mail-automation/commit/4cf7d73b4e73a63eb7d15221b5bbcfe62e6a279f))
+
 ## [1.1.2](https://github.com/chrischall/swift-mail-automation/compare/v1.1.1...v1.1.2) (2026-07-27)
 
 
