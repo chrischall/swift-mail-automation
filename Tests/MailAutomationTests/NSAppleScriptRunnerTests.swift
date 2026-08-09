@@ -66,3 +66,49 @@ struct NSAppleScriptRunnerTests {
         }
     }
 }
+
+/// Thread-affinity tests for `NSAppleScriptRunner`.
+///
+/// `NSAppleScript` must execute on the **main thread**. A script that
+/// targets another application (`tell application "Mail" …`) sends an
+/// Apple Event and waits for the reply via Carbon's
+/// `AEDefaultActiveProc` → `GetNextEventMatchingMask`, which pumps only
+/// the *main* thread's event queue — where the reply is delivered. Off
+/// the main thread the reply goes unserviced and the call stalls: ~32s
+/// measured for a script that takes ~0.1s done correctly, and no return
+/// at all after ten minutes inside a long-lived server process.
+///
+/// The tests above cannot catch this: they run self-contained scripts
+/// that send no Apple Event and so succeed from any thread. These assert
+/// the invariant directly, and need neither Mail.app nor an Automation
+/// grant.
+@Suite("NSAppleScriptRunner thread affinity")
+struct NSAppleScriptRunnerThreadAffinityTests {
+    @Test("script execution is confined to the main thread")
+    func executesOnMainThread() async {
+        let ranOnMain = await NSAppleScriptRunner.onMainThread { Thread.isMainThread }
+        #expect(
+            ranOnMain,
+            """
+            NSAppleScript must execute on the main thread — Apple Event \
+            replies are delivered to the main run loop, so running it \
+            elsewhere stalls every `tell application` script.
+            """
+        )
+    }
+
+    @Test("the result of the main-thread hop reaches the caller")
+    func propagatesResult() async {
+        let value = await NSAppleScriptRunner.onMainThread { 6 * 7 }
+        #expect(value == 42)
+    }
+
+    @Test("errors thrown on the main thread propagate to the caller")
+    func propagatesThrow() async {
+        await #expect(throws: AppleScriptError.self) {
+            try await NSAppleScriptRunner.onMainThread {
+                throw AppleScriptError.compile("boom")
+            }
+        }
+    }
+}
