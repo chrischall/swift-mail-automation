@@ -82,7 +82,13 @@ struct NSAppleScriptRunnerTests {
 /// that send no Apple Event and so succeed from any thread. These assert
 /// the invariant directly, and need neither Mail.app nor an Automation
 /// grant.
-@Suite("NSAppleScriptRunner thread affinity")
+///
+/// Carries `.serialized` to match the repo's convention for suites
+/// touching `NSAppleScriptRunner`. Unlike the live suites it needs no
+/// env-var gate: it never reaches the `NSAppleScript` bridge, hopping
+/// only plain Swift closures through `onMainThread`, so it is safe and
+/// useful on CI — where it is the sole guard against this regression.
+@Suite("NSAppleScriptRunner thread affinity", .serialized)
 struct NSAppleScriptRunnerThreadAffinityTests {
     @Test("script execution is confined to the main thread")
     func executesOnMainThread() async {

@@ -40,7 +40,7 @@ This is a **local Mail.app wrapper**, not a mail client. No IMAP/SMTP — every 
 **Layering (Sources/MailAutomation/):**
 
 - `MailService` — the single public entry point. Builds AppleScript source strings, dispatches them through an injected `AppleScriptRunner`, and parses tab-delimited results via `parseEmailLines`. Owns the Spotlight-vs-AppleScript decision for `search`.
-- `AppleScriptRunner` (protocol) + `NSAppleScriptRunner` (production impl). `NSAppleScript` isn't `Sendable`, so the production impl constructs and runs the script entirely inside a detached `Task` to keep its lifecycle on one thread. Tests inject a fake instead.
+- `AppleScriptRunner` (protocol) + `NSAppleScriptRunner` (production impl). The production impl constructs and runs the script entirely inside a hop to the **main thread** (`NSAppleScriptRunner.onMainThread(_:)`, backed by `MainActor.run`). That keeps the non-`Sendable` `NSAppleScript` lifecycle on one thread *and* is load-bearing for correctness: a script targeting another app waits for its Apple Event reply inside Carbon's `AEDefaultActiveProc`, which pumps only the main thread's event queue — where the reply is delivered. Run off the main thread it stalls (~32s on one measurement, no return before a 200s timeout on another) with no error and no timeout. Do not move this back to a detached `Task`. Tests inject a fake instead.
 - `SpotlightMailSearch` — subprocesses `/usr/bin/mdfind` against `~/Library/Mail`. Chose `mdfind` over `NSMetadataQuery` because the latter needs a RunLoop and fights Swift 6 strict concurrency. The `Runner` typealias lets tests inject a fake process runner.
 - `EmailMessage`, `ISODate`, `StringHelpers` — value types / shared helpers. All public types are `Sendable`.
 
