@@ -61,10 +61,19 @@ jobs:
           (steps.gate.outputs.run == 'true' || steps.gate.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
+          IS_FORK: ${{ steps.gate.outputs.is_fork }}
           JOB_STATUS: ${{ job.status }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: |
+          # Fork PR: its token is read-only, so this POST would 403 and turn an
+          # otherwise-green run red. arm-gate deliberately posted nothing either, so
+          # `ci-gated` stays unreported and the merge stays blocked — the intended
+          # fork behaviour (chrischall/workflows#112).
+          if [ "$IS_FORK" = "true" ]; then
+            echo "fork PR → not posting ci-gated (read-only token). The job result above is the real one; the required ci-gated context stays unreported, so the merge stays blocked until a maintainer acts."
+            exit 0
+          fi
           # job.status is one of success/failure/cancelled — a manual
           # cancellation isn't a CI failure, so it gets its own commit
           # status state+description instead of being lumped into "CI
