@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.4](https://github.com/chrischall/swift-mail-automation/compare/v1.1.3...v1.1.4) (2026-08-10)
+
+
+### Bug Fixes
+
+* parse offset-less ISO timestamps as local wall-clock time ([#49](https://github.com/chrischall/swift-mail-automation/issues/49)) ([bd25c3a](https://github.com/chrischall/swift-mail-automation/commit/bd25c3ad223a3ed17bc19b5b035bca58ff292401))
+
 ## [1.1.3](https://github.com/chrischall/swift-mail-automation/compare/v1.1.2...v1.1.3) (2026-08-09)
 
 
