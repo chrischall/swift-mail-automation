@@ -95,7 +95,7 @@ public enum ISODate {
         // datetime from being read as just its date half.
         guard sc.atEnd else { return nil }
 
-        guard (1...12).contains(month), day >= 1, day <= Self.daysInMonth(month, year),
+        guard (1 ... 12).contains(month), day >= 1, day <= Self.daysInMonth(month, year),
               hour <= 23, minute <= 59, second <= 60
         else { return nil }
 
@@ -129,10 +129,10 @@ public enum ISODate {
 
     private static func daysInMonth(_ month: Int, _ year: Int) -> Int {
         switch month {
-        case 1, 3, 5, 7, 8, 10, 12: return 31
-        case 4, 6, 9, 11: return 30
-        case 2: return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 ? 29 : 28
-        default: return 0
+        case 1, 3, 5, 7, 8, 10, 12: 31
+        case 4, 6, 9, 11: 30
+        case 2: (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 ? 29 : 28
+        default: 0
         }
     }
 
@@ -150,8 +150,8 @@ public enum ISODate {
         mutating func digits(_ n: Int) -> Int? {
             guard i + n <= chars.count else { return nil }
             var value = 0
-            for k in i..<(i + n) {
-                guard chars[k].isASCII, let d = chars[k].wholeNumberValue, (0...9).contains(d)
+            for k in i ..< (i + n) {
+                guard chars[k].isASCII, let d = chars[k].wholeNumberValue, (0 ... 9).contains(d)
                 else { return nil }
                 value = value * 10 + d
             }
@@ -174,9 +174,11 @@ public enum ISODate {
         /// One or more digits after a `.`/`,`, as a sub-second interval.
         mutating func fraction() -> TimeInterval? {
             let start = i
-            while !atEnd, chars[i].isASCII, chars[i].isNumber { i += 1 }
+            while !atEnd, chars[i].isASCII, chars[i].isNumber {
+                i += 1
+            }
             guard i > start else { return nil }
-            return TimeInterval("0." + String(chars[start..<i]))
+            return TimeInterval("0." + String(chars[start ..< i]))
         }
     }
 }

@@ -121,6 +121,23 @@ struct ISODateTests {
         #expect(eastern.secondsFromGMT(for: ambiguous) == -4 * 3600)
     }
 
+    /// The other side of the DST year: 2026-03-08 jumps 02:00 EST straight
+    /// to 03:00 EDT, so 02:30 never happens. `parse` documents that such a
+    /// value shifts forward rather than failing — pinned here so the claim
+    /// is checked rather than asserted.
+    @Test("a nonexistent spring-forward wall clock shifts forward")
+    func dstSpringForwardGap() throws {
+        let gap = try #require(ISODate.parse("2026-03-08T02:30:00", timeZone: eastern))
+        let w = wall(gap, in: eastern)
+        #expect(w.hour == 3 && w.minute == 30)
+        #expect(eastern.secondsFromGMT(for: gap) == -4 * 3600) // EDT
+
+        // The hours either side of the gap are untouched.
+        let before = try #require(ISODate.parse("2026-03-08T01:30:00", timeZone: eastern))
+        #expect(eastern.secondsFromGMT(for: before) == -5 * 3600) // EST
+        #expect(wall(before, in: eastern).hour == 1)
+    }
+
     // MARK: - rejection
 
     @Test("rejects a datetime it can only partially consume")
@@ -155,7 +172,7 @@ struct ISODateTests {
 @Suite("ISODate call-site compatibility")
 struct ISODateCompatibilityTests {
     @Test("parse is still usable as a bare function value")
-    func usableAsFunctionValue() throws {
+    func usableAsFunctionValue() {
         // Guards the reason `parse(_:)` is a separate overload rather than a
         // defaulted parameter — this call site must keep compiling.
         let parsed = ["2026-08-18T16:30:00", "nonsense"].compactMap(ISODate.parse)
@@ -166,7 +183,8 @@ struct ISODateCompatibilityTests {
     func overloadsAgree() throws {
         let viaDefault = try #require(ISODate.parse("2026-08-18T16:30:00"))
         let viaExplicit = try #require(
-            ISODate.parse("2026-08-18T16:30:00", timeZone: .current))
+            ISODate.parse("2026-08-18T16:30:00", timeZone: .current)
+        )
         #expect(viaDefault == viaExplicit)
     }
 }
