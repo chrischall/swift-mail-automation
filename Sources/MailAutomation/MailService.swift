@@ -320,6 +320,14 @@ public struct MailService: Sendable {
     ///   - forceBackend: Pin the backend instead of letting the service
     ///     choose. Used by tests and by the diagnostics probe.
     /// - Returns: Matching messages, **newest first**.
+    ///
+    ///   On the index and Spotlight backends this is a global ordering:
+    ///   every match is seen, then the newest `limit` are returned. The
+    ///   AppleScript backend can only sort the page it retrieved — sorting
+    ///   globally there would mean resolving every match, which is the cost
+    ///   that makes it unusable in the first place. So on that backend a
+    ///   query with more matches than `limit` returns the newest of
+    ///   whichever mailboxes Mail walked first, not the newest overall.
     /// - Throws: ``MailQueryError/empty`` for a query with no terms;
     ///   ``MailServiceError/timedOut(operation:seconds:)`` when a backend
     ///   exceeded its bound — never an empty array;
@@ -463,8 +471,17 @@ public struct MailService: Sendable {
             ? "set acctName to \"\(Self.escapeForAppleScript(account!))\""
             : "set acctName to \"\""
 
+        // A non-positive `sinceDaysAgo` means "no date bound" on the index
+        // and Spotlight backends. Computing `now - 0` here instead would
+        // make this backend match nothing at all — the same input quietly
+        // meaning two different things depending on which backend answered.
+        let dateClause = sinceDaysAgo > 0 ? " and (date sent > cutoff)" : ""
+        let cutoffLine = sinceDaysAgo > 0
+            ? "set cutoff to (current date) - (\(sinceDaysAgo) * days)"
+            : ""
+
         let body = """
-        set cutoff to (current date) - (\(sinceDaysAgo) * days)
+        \(cutoffLine)
         tell application "Mail"
             set out to ""
             set found to 0
@@ -473,7 +490,7 @@ public struct MailService: Sendable {
             \(acctResolve)
             repeat with m in mbList
                 if found \u{2265} \(maxN) then exit repeat
-                set matchMsgs to (messages of m whose \(predicate) and (date sent > cutoff))
+                set matchMsgs to (messages of m whose \(predicate)\(dateClause))
                 repeat with msg in matchMsgs
                     if found \u{2265} \(maxN) then exit repeat
                     if skipped < \(skip) then

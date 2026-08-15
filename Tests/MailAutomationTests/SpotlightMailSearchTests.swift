@@ -254,6 +254,19 @@ struct SpotlightMailSearchTests {
         #expect(SpotlightMailSearch.parseAttrOutput(raw, limit: 0).isEmpty)
     }
 
+    @Test("a truncated read is reported, not silently ranked")
+    func truncatedOutputIsReported() async throws {
+        // The sort is global over mdfind's output, so dropping the tail can
+        // drop the newest hits. Returning the survivors would be an
+        // incomplete scan that looks complete.
+        let big = String(repeating: "x", count: SpotlightMailSearch.maxOutputBytes)
+        let search = SpotlightMailSearch(runner: { _ in big })
+
+        await #expect(throws: MailServiceError.self) {
+            _ = try await search.search(query: MailQuery.parse("x"), limit: 5)
+        }
+    }
+
     @Test("the mdfind timestamp parses under a non-US locale")
     func dateParsingIsLocaleIndependent() {
         // The format is mdfind's, not the user's — a locale-sensitive

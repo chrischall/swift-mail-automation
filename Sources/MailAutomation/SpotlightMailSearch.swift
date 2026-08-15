@@ -76,6 +76,17 @@ public struct SpotlightMailSearch: Sendable {
 
         log.debug("mdfind: \(predicate)")
         let output = try await runner(args)
+        // The sort is global over mdfind's output, so a truncated read can
+        // drop the newest hits — and silently returning the survivors would
+        // be exactly the "incomplete scan that looks complete" this kit is
+        // being fixed to stop doing.
+        if output.count >= Self.maxOutputBytes {
+            throw MailServiceError.tooBroad(
+                "Spotlight returned more than \(Self.maxOutputBytes / (1024 * 1024))MB of " +
+                    "matches, too many to rank reliably. Narrow the query: add more terms " +
+                    "or reduce sinceDaysAgo."
+            )
+        }
         return Self.parseAttrOutput(output, limit: limit)
     }
 
@@ -326,7 +337,8 @@ public struct SpotlightMailSearch: Sendable {
     static let maxOutputBytes = 8 * 1024 * 1024
 
     /// Reads a file handle to EOF on a background thread, keeping at most
-    /// ``maxOutputBytes``.
+    /// ``maxOutputBytes``. Callers detect the truncation by comparing the
+    /// result's size against the cap — see ``search(query:limit:sinceDaysAgo:)``.
     private static func readToEnd(_ handle: FileHandle) async -> Data {
         await withCheckedContinuation { cont in
             DispatchQueue.global().async {

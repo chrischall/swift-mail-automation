@@ -28,7 +28,15 @@ dependencies: [
 ```swift
 import MailAutomation
 
-let mail = MailService(runner: NSAppleScriptRunner())
+// Reads Mail's Envelope Index when Full Disk Access allows it — milliseconds
+// even on a 275k-message mailbox. Falls back to Spotlight, then AppleScript.
+let (mail, indexError) = MailService.withIndexIfAvailable(
+    runner: NSAppleScriptRunner()
+)
+if let indexError {
+    // Worth logging — the fallbacks are orders of magnitude slower.
+    print("mail: fast index unavailable — \(indexError)")
+}
 
 // Discover what's configured in Mail.app
 let accounts = try await mail.listAccounts()
@@ -41,18 +49,7 @@ let iCloudBoxes = try await mail.listMailboxes(account: "iCloud")
 let unread = try await mail.getUnread(limit: 10)
 let workUnread = try await mail.getUnread(limit: 10, account: "Work")
 
-// Search: reads Mail's Envelope Index directly — milliseconds even on a
-// 275k-message mailbox, and always newest-first. Build the service with
-// `withIndexIfAvailable` to enable it (needs Full Disk Access); it falls
-// back to Spotlight, then AppleScript, when the index can't be opened.
-let (mail, indexError) = MailService.withIndexIfAvailable(
-    runner: NSAppleScriptRunner()
-)
-if let indexError {
-    // Worth logging — the fallbacks are orders of magnitude slower.
-    print("mail: fast index unavailable — \(indexError)")
-}
-
+// Search — newest first.
 let invoices = try await mail.search(
     query: "invoice",
     limit: 5,
@@ -90,7 +87,7 @@ are async and throw `AppleScriptError` or `MailServiceError`.
 | `listAccounts() -> [String]` | Discover Mail account names (`"iCloud"`, `"Google"`, …) |
 | `listMailboxes(account:) -> [String]` | Mailboxes inside an account |
 | `getUnread(limit:account:offset:) -> [EmailMessage]` | Unread messages, optionally scoped; `offset` pages beyond the 100 safety cap |
-| `search(query:limit:account:mailbox:sinceDaysAgo:offset:forceBackend:) -> [EmailMessage]` | Boolean/field-scoped search, index-first, **newest-first**; `offset` for paging |
+| `search(query:limit:account:mailbox:sinceDaysAgo:offset:forceBackend:) -> [EmailMessage]` | Boolean/field-scoped search, index-first, **newest-first** (see the caveat below for the AppleScript fallback); `offset` for paging |
 | `getMessage(id:account:) -> MailMessageDetail` | One message's **complete, untruncated** body by its `messageId` |
 | `send(to:subject:body:cc:bcc:)` | Compose + send a new message |
 
@@ -124,6 +121,19 @@ An empty query is **rejected**, not treated as "match everything".
   **bodies**; can't scope by account or mailbox.
 - `.applescript` — drives Mail.app. Last resort; see the warning below.
 - `nil` (default) — index, then Spotlight (when unscoped), then AppleScript.
+
+### Ordering caveat on the AppleScript fallback
+
+The index and Spotlight backends sort **globally**: they see every match,
+then take the newest `limit`.
+
+The AppleScript backend can't. Sorting globally would mean resolving every
+match first, which is the 154 s cost in the table below. So it stops at
+`limit` in Mail's mailbox-iteration order and sorts *that page* — you get a
+correctly-ordered page, but on a query with more matches than `limit` it is
+"the newest of whichever mailboxes Mail walked first", not the newest
+overall. There is no way around this short of the index; it is the reason
+the index exists.
 
 ### Why the index is the default
 

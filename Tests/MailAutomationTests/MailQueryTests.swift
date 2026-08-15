@@ -218,8 +218,28 @@ struct MailQueryTests {
 
     @Test("AppleScript predicate escapes embedded quotes so it cannot break out of the literal")
     func appleScriptEscapes() throws {
-        let p = try MailQuery.parse("say \\\"hi\\\"").appleScriptPredicate()
-        #expect(!p.contains("\"hi\"") || p.contains("\\\""))
+        // Term text containing a bare double quote. Unescaped, that quote
+        // terminates the AppleScript string literal and everything after it
+        // is parsed as code.
+        let q = try MailQuery.parse(#"hi"there"#)
+        #expect(q.groups[0][0].value == #"hi"there"#)
+
+        let p = try q.appleScriptPredicate()
+        #expect(p.contains(#"hi\"there"#), "the quote must be backslash-escaped: \(p)")
+        #expect(!p.contains(#"contains "hi"there""#), "unescaped, this breaks out of the literal")
+    }
+
+    @Test("AppleScript predicate escapes a trailing backslash")
+    func appleScriptEscapesTrailingBackslash() throws {
+        // `foo\` would otherwise escape the literal's own closing quote and
+        // swallow it.
+        let q = try MailQuery.parse(#"foo\"#)
+        #expect(q.groups[0][0].value == #"foo\"#)
+
+        let p = try q.appleScriptPredicate()
+        // Doubled, and the literal still closes right after it — an
+        // undoubled `foo\` would eat the closing quote instead.
+        #expect(p.contains(#"contains "foo\\")"#), "expected an escaped, closed literal: \(p)")
     }
 
     @Test("to: is rejected on the AppleScript backend, which cannot express it")
