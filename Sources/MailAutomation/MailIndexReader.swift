@@ -345,7 +345,7 @@ public actor MailIndexReader {
         guard limit > 0 else { return [] }
 
         var wheres = ["m.deleted = 0", predicate.sql]
-        var args = predicate.args
+        let args = predicate.args
 
         if let days = sinceDaysAgo, days > 0 {
             let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
@@ -354,32 +354,25 @@ public actor MailIndexReader {
         if unreadOnly {
             wheres.append("m.read = 0")
         }
-        // Account/mailbox scoping happens on the decoded URL, which SQL
-        // can't decode — so narrow in SQL by the UUIDs we resolved, and
-        // let the row loop do the exact name match.
-        if let account, !account.isEmpty {
-            let uuids = accountNames
-                .filter { $0.value.caseInsensitiveCompare(account) == .orderedSame }
-                .map(\.key)
-            guard !uuids.isEmpty else { return [] }
-            let placeholders = uuids.map { _ in "mb.url LIKE ? ESCAPE '\(MailQuery.likeEscape)'" }
-            wheres.append("(" + placeholders.joined(separator: " OR ") + ")")
-            args.append(contentsOf: uuids.map { "%\(MailQuery.escapeForLike($0))%" })
+        // Account/mailbox scoping resolves to concrete mailbox row ids
+        // *before* the message query, then applies as `m.mailbox IN (…)`.
+        //
+        // Filtering after the fact instead would mean over-fetching and
+        // hoping: a mailbox whose matches all sat outside the over-fetch
+        // window would come back empty, indistinguishable from "no matching
+        // mail" — precisely the conflation `timedOut` exists to eliminate.
+        if account?.isEmpty == false || mailbox?.isEmpty == false {
+            let ids = try mailboxRowIDs(account: account, mailbox: mailbox)
+            guard !ids.isEmpty else { return [] }
+            wheres.append("m.mailbox IN (\(ids.map(String.init).joined(separator: ",")))")
         }
 
-        // Over-fetch when a mailbox filter is pending, since it is applied
-        // after the rows come back. Bounded so a pathological filter still
-        // can't turn into an unbounded scan.
-        let wantsPostFilter = (mailbox?.isEmpty == false)
-        let fetchCount = wantsPostFilter
-            ? min((limit + offset) * 20 + 100, 10000)
-            : limit + offset
-
+        // Bounded in the query. Nothing is fetched that isn't returned.
         let sql = """
         \(Self.messageSelect)
         WHERE \(wheres.joined(separator: " AND "))
         ORDER BY m.date_sent DESC
-        LIMIT \(fetchCount)
+        LIMIT \(limit) OFFSET \(max(0, offset))
         """
 
         let rows = try query(sql: sql, args: args, columns: 7) { cols -> Row in
@@ -394,18 +387,10 @@ public actor MailIndexReader {
             )
         }
 
-        var out: [EmailMessage] = []
-        var skipped = 0
-        for row in rows {
+        return rows.map { row in
             let mbName = Self.mailboxName(fromURL: row.mailboxURL)
-            if let mailbox, !mailbox.isEmpty, !Self.mailbox(mbName, matches: mailbox) {
-                continue
-            }
-            if skipped < offset {
-                skipped += 1; continue
-            }
             let acct = accountName(forUUID: Self.accountUUID(fromURL: row.mailboxURL))
-            out.append(EmailMessage(
+            return EmailMessage(
                 subject: row.subject,
                 sender: row.sender,
                 dateSent: Self.formatDate(row.dateSent),
@@ -413,12 +398,39 @@ public actor MailIndexReader {
                 isRead: row.isRead,
                 mailbox: acct.isEmpty ? mbName : "\(acct) — \(mbName)",
                 messageId: row.rfcID
-            ))
-            if out.count >= limit {
-                break
-            }
+            )
         }
-        return out
+    }
+
+    /// Resolves an account name and/or mailbox name to concrete
+    /// `mailboxes.ROWID`s.
+    ///
+    /// Done in Swift rather than SQL because the match is against the
+    /// *decoded* mailbox path (`[Gmail]/All Mail`, not
+    /// `%5BGmail%5D/All%20Mail`) and SQLite can't percent-decode. The table
+    /// is small enough (tens of rows) that reading all of it is cheaper
+    /// than being clever.
+    ///
+    /// - Returns: Matching row ids. Empty means "no such account/mailbox",
+    ///   which callers turn into an empty result — correct, and distinct
+    ///   from a truncated one.
+    private func mailboxRowIDs(account: String?, mailbox: String?) throws -> [Int] {
+        let rows = try query(
+            sql: "SELECT ROWID, url FROM mailboxes", args: [], columns: 2
+        ) { (rowid: Int($0[0] ?? "") ?? -1, url: $0[1] ?? "") }
+
+        return rows.compactMap { row in
+            guard row.rowid >= 0 else { return nil }
+            if let account, !account.isEmpty {
+                let name = accountName(forUUID: Self.accountUUID(fromURL: row.url))
+                guard name.caseInsensitiveCompare(account) == .orderedSame else { return nil }
+            }
+            if let mailbox, !mailbox.isEmpty {
+                let mbName = Self.mailboxName(fromURL: row.url)
+                guard Self.mailbox(mbName, matches: mailbox) else { return nil }
+            }
+            return row.rowid
+        }
     }
 
     private struct Row {

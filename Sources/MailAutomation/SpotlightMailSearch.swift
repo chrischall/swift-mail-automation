@@ -44,13 +44,14 @@ public struct SpotlightMailSearch: Sendable {
     /// Spotlight; `content` is always `""` and `isRead` is always `true`.
     ///
     /// - Parameters:
-    ///   - query: Substring to match (case-insensitive). Whitespace-only
-    ///     queries return `[]` without invoking the runner.
+    ///   - query: Parsed query. Unscoped terms match subject **or body** —
+    ///     Spotlight is the only backend with body text. An empty query is
+    ///     impossible here: ``MailQuery/parse(_:)`` rejects one first.
     ///   - limit: Maximum number of results to return.
     ///   - sinceDaysAgo: Optional date bound. `nil` or a non-positive value
     ///     disables the bound. Defaults to 90 days.
-    /// - Returns: Parsed hits, in the order `mdfind` emitted them. Empty
-    ///   if the query is blank or `mdfind` returned nothing.
+    /// - Returns: Matching messages, **newest first**. Empty if `mdfind`
+    ///   returned nothing.
     /// - Throws: Whatever the injected `Runner` throws — for the default
     ///   runner, this is a `Foundation.Process` launch error (e.g. the
     ///   binary is missing or can't be executed).
@@ -134,7 +135,8 @@ public struct SpotlightMailSearch: Sendable {
 
     // ─── Parsing ───────────────────────────────────────────────────────────
 
-    /// Parse `mdfind -attr a -attr b …` output. Format is one line per hit:
+    /// Parse `mdfind -attr a -attr b …` output, returning hits newest
+    /// first. Format is one line per hit:
     ///
     ///     /path/to/file.emlx kMDItemSubject = "Invoice" kMDItemAuthors = ("a@b.com") kMDItemContentCreationDate =
     /// 2026-04-01 09:00:00 +0000
@@ -142,11 +144,14 @@ public struct SpotlightMailSearch: Sendable {
     /// We use a pragmatic regex split rather than a full parser — attributes
     /// appear in the order we passed to `mdfind`.
     static func parseAttrOutput(_ raw: String, limit: Int) -> [EmailMessage] {
-        var out: [EmailMessage] = []
+        guard limit > 0 else { return [] }
+        var parsed: [(message: EmailMessage, date: Date?)] = []
+
+        // Every line is parsed before anything is dropped. Truncating to
+        // `limit` in `mdfind`'s own order — which is unspecified — would
+        // discard newer matches in favour of older ones, the same defect
+        // this backend exists to avoid on the Mail.app path.
         for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
-            if out.count >= limit {
-                break
-            }
             let s = String(line)
             guard let subjectRange = s.range(of: "kMDItemSubject = ") else { continue }
             let path = String(s[..<subjectRange.lowerBound]).trimmingCharacters(in: .whitespaces)
@@ -163,16 +168,60 @@ public struct SpotlightMailSearch: Sendable {
 
             let mailbox = Self.mailboxFromPath(path)
 
-            out.append(EmailMessage(
-                subject: subject,
-                sender: sender,
-                dateSent: dateSent,
-                content: "", // body not fetched here — caller can open the .emlx if needed
-                isRead: true, // Spotlight doesn't index read state; optimistic default
-                mailbox: mailbox
+            parsed.append((
+                EmailMessage(
+                    subject: subject,
+                    sender: sender,
+                    dateSent: dateSent,
+                    content: "", // body not fetched here — caller can open the .emlx if needed
+                    isRead: true, // Spotlight doesn't index read state; optimistic default
+                    mailbox: mailbox
+                ),
+                parseSpotlightDate(dateSent)
             ))
         }
-        return out
+
+        // Newest first, matching the other backends. Undated hits sort last
+        // rather than being dropped; ties keep source order so the result is
+        // deterministic.
+        return parsed
+            .enumerated()
+            .sorted { a, b in
+                switch (a.element.date, b.element.date) {
+                case let (l?, r?):
+                    if l == r {
+                        return a.offset < b.offset
+                    }
+                    return l > r
+                case (nil, _?): return false
+                case (_?, nil): return true
+                case (nil, nil): return a.offset < b.offset
+                }
+            }
+            .prefix(limit)
+            .map(\.element.message)
+    }
+
+    /// Parses the timestamp `mdfind -attr` prints for
+    /// `kMDItemContentCreationDate`, e.g. `2026-04-01 09:00:00 +0000`.
+    ///
+    /// Fixed `en_US_POSIX` locale and UTC: the format is `mdfind`'s, not the
+    /// user's, so a locale-sensitive parser would fail on non-US systems.
+    /// Returns `nil` for `(null)` and anything unparseable — those sort last
+    /// rather than being discarded.
+    static func parseSpotlightDate(_ raw: String) -> Date? {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != "(null)" else { return nil }
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone(secondsFromGMT: 0)
+        for pattern in ["yyyy-MM-dd HH:mm:ss Z", "yyyy-MM-dd HH:mm:ss"] {
+            fmt.dateFormat = pattern
+            if let d = fmt.date(from: trimmed) {
+                return d
+            }
+        }
+        return ISODate.parse(trimmed)
     }
 
     /// Pull "Foo" out of `"Foo" rest…` → `Foo`.

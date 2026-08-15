@@ -211,4 +211,67 @@ private actor ArgBox {
     var called = false
     func record(_ a: [String]) { args = a }
     func set(_ v: Bool) { called = v }
+
+    // ─── Ordering ──────────────────────────────────────────────────────────
+
+    @Test("parseAttrOutput returns hits newest-first regardless of mdfind order")
+    func attrOutputIsDateSorted() {
+        // mdfind's emission order is unspecified; feed it deliberately
+        // shuffled.
+        let raw = [
+            "/M/Old.mbox/Messages/1.emlx kMDItemSubject = \"Old\" kMDItemAuthors = (\"a@x\") kMDItemContentCreationDate = 2026-01-02 03:04:05 +0000",
+            "/M/New.mbox/Messages/2.emlx kMDItemSubject = \"Newest\" kMDItemAuthors = (\"b@x\") kMDItemContentCreationDate = 2026-08-14 09:00:00 +0000",
+            "/M/Mid.mbox/Messages/3.emlx kMDItemSubject = \"Middle\" kMDItemAuthors = (\"c@x\") kMDItemContentCreationDate = 2026-05-05 12:00:00 +0000",
+        ].joined(separator: "\n")
+
+        let out = SpotlightMailSearch.parseAttrOutput(raw, limit: 10)
+
+        #expect(out.map(\.subject) == ["Newest", "Middle", "Old"])
+    }
+
+    @Test("limit keeps the newest hits, not whichever mdfind emitted first")
+    func limitKeepsNewest() {
+        // The bug this guards: truncating in mdfind order drops newer
+        // matches in favour of older ones — the same defect the Mail.app
+        // backend had.
+        let raw = [
+            "/M/A.mbox/Messages/1.emlx kMDItemSubject = \"Old\" kMDItemAuthors = (\"a@x\") kMDItemContentCreationDate = 2026-01-02 03:04:05 +0000",
+            "/M/B.mbox/Messages/2.emlx kMDItemSubject = \"Older\" kMDItemAuthors = (\"b@x\") kMDItemContentCreationDate = 2025-01-02 03:04:05 +0000",
+            "/M/C.mbox/Messages/3.emlx kMDItemSubject = \"Newest\" kMDItemAuthors = (\"c@x\") kMDItemContentCreationDate = 2026-08-14 09:00:00 +0000",
+        ].joined(separator: "\n")
+
+        let out = SpotlightMailSearch.parseAttrOutput(raw, limit: 1)
+
+        #expect(out.map(\.subject) == ["Newest"])
+    }
+
+    @Test("undated hits sort last but are not dropped")
+    func undatedSortLast() {
+        let raw = [
+            "/M/A.mbox/Messages/1.emlx kMDItemSubject = \"NoDate\" kMDItemAuthors = (\"a@x\") kMDItemContentCreationDate = (null)",
+            "/M/B.mbox/Messages/2.emlx kMDItemSubject = \"Dated\" kMDItemAuthors = (\"b@x\") kMDItemContentCreationDate = 2026-08-14 09:00:00 +0000",
+        ].joined(separator: "\n")
+
+        let out = SpotlightMailSearch.parseAttrOutput(raw, limit: 10)
+
+        #expect(out.map(\.subject) == ["Dated", "NoDate"])
+    }
+
+    @Test("a non-positive limit yields nothing")
+    func nonPositiveLimit() {
+        let raw = "/M/A.mbox/Messages/1.emlx kMDItemSubject = \"X\" kMDItemAuthors = (\"a@x\") kMDItemContentCreationDate = 2026-08-14 09:00:00 +0000"
+        #expect(SpotlightMailSearch.parseAttrOutput(raw, limit: 0).isEmpty)
+    }
+
+    @Test("the mdfind timestamp parses under a non-US locale")
+    func dateParsingIsLocaleIndependent() {
+        // The format is mdfind's, not the user's — a locale-sensitive
+        // parser would return nil here on a non-US system and silently
+        // push every hit to the bottom of the sort.
+        #expect(SpotlightMailSearch.parseSpotlightDate("2026-08-14 09:00:00 +0000") != nil)
+        #expect(SpotlightMailSearch.parseSpotlightDate("2026-08-14 09:00:00") != nil)
+        #expect(SpotlightMailSearch.parseSpotlightDate("(null)") == nil)
+        #expect(SpotlightMailSearch.parseSpotlightDate("") == nil)
+        #expect(SpotlightMailSearch.parseSpotlightDate("not a date") == nil)
+    }
 }

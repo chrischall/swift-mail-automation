@@ -207,8 +207,9 @@ public struct MailService: Sendable {
     ///     the search. When `nil`, iterates all accounts.
     ///   - offset: Number of matching messages to skip before collecting
     ///     results (in mailbox-iteration order). Defaults to 0.
-    /// - Returns: Messages in mailbox-iteration order (not strictly date-
-    ///   sorted). Each `EmailMessage` has `isRead == false`.
+    /// - Returns: Unread messages, each with `isRead == false`. Ordered
+    ///   newest-first on the index backend; on the AppleScript fallback the
+    ///   order is Mail's own mailbox-iteration order, which is arbitrary.
     public func getUnread(
         limit: Int = 10,
         account: String? = nil,
