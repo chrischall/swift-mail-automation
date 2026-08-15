@@ -254,17 +254,64 @@ struct SpotlightMailSearchTests {
         #expect(SpotlightMailSearch.parseAttrOutput(raw, limit: 0).isEmpty)
     }
 
-    @Test("a truncated read is reported, not silently ranked")
-    func truncatedOutputIsReported() async throws {
-        // The sort is global over mdfind's output, so dropping the tail can
-        // drop the newest hits. Returning the survivors would be an
-        // incomplete scan that looks complete.
-        let big = String(repeating: "x", count: SpotlightMailSearch.maxOutputBytes)
-        let search = SpotlightMailSearch(runner: { _ in big })
+    @Test("a truncated read throws instead of being silently ranked")
+    func truncatedReadThrows() async throws {
+        // Real subprocess, tiny cap: /bin/cat emits more than the cap, so
+        // the runner must refuse rather than return the prefix. The sort is
+        // global over this output, so a dropped tail can drop the newest
+        // hits.
+        let file = try Self.tempFile(containing: String(repeating: "a", count: 4096))
+        defer { try? FileManager.default.removeItem(at: file) }
 
+        let runner = SpotlightMailSearch.makeProcessRunner(
+            executableURL: URL(fileURLWithPath: "/bin/cat"), maxOutputBytes: 64
+        )
         await #expect(throws: MailServiceError.self) {
-            _ = try await search.search(query: MailQuery.parse("x"), limit: 5)
+            _ = try await runner([file.path])
         }
+    }
+
+    @Test("truncation is counted in bytes, not characters, so non-ASCII still trips it")
+    func truncationIsByteAccurate() async throws {
+        // The bug this guards: comparing `String.count` (grapheme clusters)
+        // against a byte cap. 200 emoji are 800 UTF-8 bytes but only 200
+        // characters, so a character-based check against a 256-byte cap
+        // would not fire — and a cut through a multi-byte sequence could
+        // decode to "" and read as a zero-result success.
+        let payload = String(repeating: "📧", count: 200)
+        #expect(payload.count < 256, "precondition: fewer characters than the cap")
+        #expect(payload.utf8.count > 256, "precondition: more bytes than the cap")
+
+        let file = try Self.tempFile(containing: payload)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let runner = SpotlightMailSearch.makeProcessRunner(
+            executableURL: URL(fileURLWithPath: "/bin/cat"), maxOutputBytes: 256
+        )
+        await #expect(throws: MailServiceError.self) {
+            _ = try await runner([file.path])
+        }
+    }
+
+    @Test("output that fits the cap is returned intact, non-ASCII included")
+    func untruncatedReadSucceeds() async throws {
+        let payload = "Rückmeldung — 請求書 📧"
+        let file = try Self.tempFile(containing: payload)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let runner = SpotlightMailSearch.makeProcessRunner(
+            executableURL: URL(fileURLWithPath: "/bin/cat"), maxOutputBytes: 4096
+        )
+        let out = try await runner([file.path])
+        #expect(out == payload)
+    }
+
+    /// Writes `contents` to a throwaway file and returns its URL.
+    private static func tempFile(containing contents: String) throws -> URL {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("spotlight-cap-\(UUID().uuidString).txt")
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+        return url
     }
 
     @Test("the mdfind timestamp parses under a non-US locale")

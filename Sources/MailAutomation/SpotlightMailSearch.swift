@@ -21,6 +21,7 @@ public struct SpotlightMailSearch: Sendable {
 
     private let runner: Runner
     private let log: Logger
+    private let maxOutputBytes: Int
 
     /// Create a Spotlight-backed search.
     ///
@@ -29,8 +30,17 @@ public struct SpotlightMailSearch: Sendable {
     ///     spawn the real `/usr/bin/mdfind`. Inject a fake in tests.
     ///   - log: Logger for debug tracing of generated predicates. When
     ///     `nil`, a per-module logger is used.
-    public init(runner: Runner? = nil, log: Logger? = nil) {
-        self.runner = runner ?? SpotlightMailSearch.defaultRunner
+    public init(
+        runner: Runner? = nil,
+        log: Logger? = nil,
+        maxOutputBytes: Int = SpotlightMailSearch.defaultMaxOutputBytes
+    ) {
+        self.maxOutputBytes = maxOutputBytes
+        self.runner = runner
+            ?? SpotlightMailSearch.makeProcessRunner(
+                executableURL: SpotlightMailSearch.mdfindURL,
+                maxOutputBytes: maxOutputBytes
+            )
         self.log = log ?? Logger(label: "com.chall.apple-mail-kit.spotlight")
     }
 
@@ -75,18 +85,15 @@ public struct SpotlightMailSearch: Sendable {
         ]
 
         log.debug("mdfind: \(predicate)")
+        // Truncation is detected by the runner, which counts the bytes it
+        // actually read. Inferring it here from the decoded string's length
+        // does not work: `String.count` counts grapheme clusters, so 8MB of
+        // non-ASCII mail decodes to far fewer than 8_388_608 characters and
+        // the check never fires — and a cut through a multi-byte sequence
+        // can fail to decode at all, yielding `""` and a *zero*-result
+        // "success". Both are the silent-incomplete-scan failure this exists
+        // to prevent.
         let output = try await runner(args)
-        // The sort is global over mdfind's output, so a truncated read can
-        // drop the newest hits — and silently returning the survivors would
-        // be exactly the "incomplete scan that looks complete" this kit is
-        // being fixed to stop doing.
-        if output.count >= Self.maxOutputBytes {
-            throw MailServiceError.tooBroad(
-                "Spotlight returned more than \(Self.maxOutputBytes / (1024 * 1024))MB of " +
-                    "matches, too many to rank reliably. Narrow the query: add more terms " +
-                    "or reduce sinceDaysAgo."
-            )
-        }
         return Self.parseAttrOutput(output, limit: limit)
     }
 
@@ -282,8 +289,6 @@ public struct SpotlightMailSearch: Sendable {
     /// dependency we don't need.
     static let mdfindURL = URL(fileURLWithPath: "/usr/bin/mdfind")
 
-    private static let defaultRunner: Runner = makeProcessRunner(executableURL: mdfindURL)
-
     /// Build a `Runner` that spawns the given executable and collects its
     /// stdout. Factored out so tests can point at a non-existent URL to
     /// exercise the launch-error branch of `Process.run()`.
@@ -300,7 +305,18 @@ public struct SpotlightMailSearch: Sendable {
     ///
     /// Both stdout *and* stderr are drained — an undrained stderr wedges
     /// the child exactly the same way.
-    static func makeProcessRunner(executableURL: URL) -> Runner {
+    /// ## Why truncation throws rather than returning what fit
+    ///
+    /// The sort in ``parseAttrOutput(_:limit:)`` is global over this output,
+    /// so dropping the tail can drop the *newest* hits — the ones the caller
+    /// most wants. Returning the survivors would be an incomplete scan that
+    /// looks complete, the same failure ``MailServiceError/timedOut(operation:seconds:)``
+    /// exists to prevent. The byte count is kept here, where the bytes are,
+    /// rather than inferred from the decoded string's length by a caller.
+    static func makeProcessRunner(
+        executableURL: URL,
+        maxOutputBytes: Int = SpotlightMailSearch.defaultMaxOutputBytes
+    ) -> Runner {
         { args in
             let task = Process()
             task.executableURL = executableURL
@@ -317,42 +333,73 @@ public struct SpotlightMailSearch: Sendable {
             }
 
             // Read both pipes to EOF off the calling thread before waiting
-            // on exit. Reading to EOF is what lets the child finish.
-            async let out = Self.readToEnd(outPipe.fileHandleForReading)
-            async let err = Self.readToEnd(errPipe.fileHandleForReading)
-            let (stdoutData, _) = await (out, err)
+            // on exit. Reading to EOF is what lets the child finish — the
+            // read must continue past the cap even though the excess is
+            // discarded, or the child blocks in write() forever.
+            async let out = Self.readToEnd(
+                outPipe.fileHandleForReading, keeping: maxOutputBytes
+            )
+            async let err = Self.readToEnd(
+                errPipe.fileHandleForReading, keeping: 0
+            )
+            let (stdout, _) = await (out, err)
 
             task.waitUntilExit()
-            return String(data: stdoutData, encoding: .utf8) ?? ""
+
+            if stdout.truncated {
+                throw MailServiceError.tooBroad(
+                    "Spotlight returned more than \(maxOutputBytes / (1024 * 1024))MB of " +
+                        "matches, too many to rank reliably. Narrow the query: add more " +
+                        "terms, or reduce sinceDaysAgo."
+                )
+            }
+            // Lossy conversion, not `?? ""`: a byte the decoder dislikes
+            // must not turn a full read into a silent zero-result success.
+            return String(decoding: stdout.data, as: UTF8.self)
         }
     }
 
-    /// Hard cap on bytes read from a child process.
+    /// Default hard cap on bytes read from a child process.
     ///
     /// A broad Spotlight query can match a whole mail store; without a cap
     /// the reply is bounded only by how much mail the user has. 8 MB is far
     /// more than any sane result set and still keeps the read bounded.
-    /// Reading continues past the cap (draining is what lets the child
-    /// exit) but the excess is discarded.
-    static let maxOutputBytes = 8 * 1024 * 1024
+    /// Overridable via ``init(runner:log:maxOutputBytes:)`` so tests can
+    /// exercise the truncation path without generating 8 MB.
+    public static let defaultMaxOutputBytes = 8 * 1024 * 1024
+
+    /// Bytes read from a child, plus whether the cap was hit.
+    ///
+    /// The flag is the point: it records truncation at the moment bytes are
+    /// counted, so no later stage has to infer it from a decoded length.
+    struct CappedRead: Sendable {
+        let data: Data
+        let truncated: Bool
+    }
 
     /// Reads a file handle to EOF on a background thread, keeping at most
-    /// ``maxOutputBytes``. Callers detect the truncation by comparing the
-    /// result's size against the cap — see ``search(query:limit:sinceDaysAgo:)``.
-    private static func readToEnd(_ handle: FileHandle) async -> Data {
+    /// `keeping` bytes and reporting whether more arrived.
+    ///
+    /// Always reads to EOF regardless of the cap — draining is what lets the
+    /// child exit.
+    private static func readToEnd(
+        _ handle: FileHandle, keeping cap: Int
+    ) async -> CappedRead {
         await withCheckedContinuation { cont in
             DispatchQueue.global().async {
                 var kept = Data()
+                var total = 0
                 while true {
                     let chunk = handle.availableData
                     if chunk.isEmpty {
                         break
                     }
-                    if kept.count < maxOutputBytes {
-                        kept.append(chunk.prefix(maxOutputBytes - kept.count))
+                    total += chunk.count
+                    if kept.count < cap {
+                        kept.append(chunk.prefix(cap - kept.count))
                     }
                 }
-                cont.resume(returning: kept)
+                cont.resume(returning: CappedRead(data: kept, truncated: total > cap))
             }
         }
     }
