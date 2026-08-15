@@ -7,24 +7,35 @@ struct SpotlightMailSearchTests {
     // ─── predicate construction ────────────────────────────────────────────
 
     @Test("buildPredicate matches subject OR body case-insensitively")
-    func predicateSubjectOrBody() {
-        let p = SpotlightMailSearch.buildPredicate(query: "invoice", sinceDaysAgo: nil)
+    func predicateSubjectOrBody() throws {
+        let p = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("invoice"), sinceDaysAgo: nil)
         #expect(p.contains("kMDItemSubject == '*invoice*'c"))
         #expect(p.contains("kMDItemTextContent == '*invoice*'c"))
         #expect(p.contains("kMDItemKind == 'Mail Message'"))
     }
 
     @Test("buildPredicate appends a date bound when requested")
-    func predicateDateBound() {
-        let p = SpotlightMailSearch.buildPredicate(query: "q", sinceDaysAgo: 30)
+    func predicateDateBound() throws {
+        let p = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("q"), sinceDaysAgo: 30)
         #expect(p.contains("kMDItemContentCreationDate"))
         #expect(p.contains("$time.iso("))
     }
 
     @Test("buildPredicate escapes single quotes in the query")
-    func predicateEscapesQuotes() {
-        let p = SpotlightMailSearch.buildPredicate(query: "it's a test", sinceDaysAgo: nil)
-        #expect(p.contains("it\\'s a test"))
+    func predicateEscapesQuotes() throws {
+        // A bare phrase is three ANDed terms; assert the quote inside the
+        // first one is escaped so it can't terminate the mdfind literal.
+        let p = try SpotlightMailSearch.buildPredicate(
+            query: MailQuery.parse("it's a test"), sinceDaysAgo: nil
+        )
+        #expect(p.contains("it\\'s"))
+        #expect(!p.contains("'it's'"))
+
+        // And a quoted phrase stays one term, spaces intact.
+        let phrase = try SpotlightMailSearch.buildPredicate(
+            query: MailQuery.parse("\"it's a test\""), sinceDaysAgo: nil
+        )
+        #expect(phrase.contains("it\\'s a test"))
     }
 
     // ─── attr output parsing ───────────────────────────────────────────────
@@ -85,7 +96,7 @@ struct SpotlightMailSearchTests {
         }
         let search = SpotlightMailSearch(runner: runner)
 
-        let msgs = try await search.search(query: "hello", limit: 5, sinceDaysAgo: 30)
+        let msgs = try await search.search(query: MailQuery.parse("hello"), limit: 5, sinceDaysAgo: 30)
 
         #expect(msgs.count == 1)
         #expect(msgs[0].subject == "Hello")
@@ -102,8 +113,9 @@ struct SpotlightMailSearchTests {
         }
         let search = SpotlightMailSearch(runner: runner)
 
-        let msgs = try await search.search(query: "  ")
-        #expect(msgs.isEmpty)
+        await #expect(throws: MailQueryError.self) {
+            _ = try await search.search(query: MailQuery.parse("  "))
+        }
         let called = await box.called
         #expect(called == false)
     }
@@ -115,17 +127,17 @@ struct SpotlightMailSearchTests {
         let search = SpotlightMailSearch(runner: runner)
 
         await #expect(throws: Boom.self) {
-            _ = try await search.search(query: "x")
+            _ = try await search.search(query: MailQuery.parse("x"))
         }
     }
 
     @Test("buildPredicate omits the date bound when sinceDaysAgo is nil or <= 0")
-    func predicateNoDateBound() {
-        let pNil = SpotlightMailSearch.buildPredicate(query: "x", sinceDaysAgo: nil)
+    func predicateNoDateBound() throws {
+        let pNil = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("x"), sinceDaysAgo: nil)
         #expect(!pNil.contains("kMDItemContentCreationDate"))
-        let pZero = SpotlightMailSearch.buildPredicate(query: "x", sinceDaysAgo: 0)
+        let pZero = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("x"), sinceDaysAgo: 0)
         #expect(!pZero.contains("kMDItemContentCreationDate"))
-        let pNeg = SpotlightMailSearch.buildPredicate(query: "x", sinceDaysAgo: -5)
+        let pNeg = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("x"), sinceDaysAgo: -5)
         #expect(!pNeg.contains("kMDItemContentCreationDate"))
     }
 
@@ -174,7 +186,7 @@ struct SpotlightMailSearchTests {
     func defaultRunnerExecutes() async throws {
         let search = SpotlightMailSearch()
         let results = try await search.search(
-            query: "ZZXXYY_MailAutomation_Unlikely_Needle_\(UUID().uuidString)",
+            query: MailQuery.parse("ZZXXYY_MailAutomation_Unlikely_Needle_\(UUID().uuidString)"),
             limit: 1,
             sinceDaysAgo: 1
         )
@@ -182,7 +194,7 @@ struct SpotlightMailSearchTests {
     }
 
     @Test("process runner throws when the executable can't be launched")
-    func processRunnerLaunchFailureThrows() async {
+    func processRunnerLaunchFailureThrows() async throws {
         let runner = SpotlightMailSearch.makeProcessRunner(
             executableURL: URL(fileURLWithPath: "/definitely/not/a/binary-\(UUID().uuidString)")
         )
