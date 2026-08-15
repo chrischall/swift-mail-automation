@@ -202,15 +202,6 @@ struct SpotlightMailSearchTests {
             _ = try await runner(["-help"])
         }
     }
-}
-
-/// Tiny actor used by the integration tests above to capture what the
-/// runner was called with. Can't nest an actor inside a `@Suite` struct.
-private actor ArgBox {
-    var args: [String] = []
-    var called = false
-    func record(_ a: [String]) { args = a }
-    func set(_ v: Bool) { called = v }
 
     // ─── Ordering ──────────────────────────────────────────────────────────
 
@@ -274,4 +265,13 @@ private actor ArgBox {
         #expect(SpotlightMailSearch.parseSpotlightDate("") == nil)
         #expect(SpotlightMailSearch.parseSpotlightDate("not a date") == nil)
     }
+}
+
+/// Tiny actor used by the integration tests above to capture what the
+/// runner was called with. Can't nest an actor inside a `@Suite` struct.
+private actor ArgBox {
+    var args: [String] = []
+    var called = false
+    func record(_ a: [String]) { args = a }
+    func set(_ v: Bool) { called = v }
 }
