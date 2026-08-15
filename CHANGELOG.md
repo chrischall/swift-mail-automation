@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/chrischall/swift-mail-automation/compare/v1.1.4...v1.2.0) (2026-08-15)
+
+
+### Features
+
+* **search:** read Mail's Envelope Index, and never report a timeout as zero results ([#52](https://github.com/chrischall/swift-mail-automation/issues/52)) ([ae265e8](https://github.com/chrischall/swift-mail-automation/commit/ae265e881d54cd96f5ec0aa9238e0bb8374121f7))
+
+
+### Bug Fixes
+
+* **search:** make sinceDaysAgo&lt;=0 mean the same thing on every backend ([#55](https://github.com/chrischall/swift-mail-automation/issues/55)) ([f1b91ed](https://github.com/chrischall/swift-mail-automation/commit/f1b91ed50430bbad752450ef4a37c0cbda7edfbe))
+
 ## [1.1.4](https://github.com/chrischall/swift-mail-automation/compare/v1.1.3...v1.1.4) (2026-08-10)
 
 
