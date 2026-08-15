@@ -73,14 +73,17 @@ struct MailServiceTests {
 
     // ─── Dispatch: search plumbing ─────────────────────────────────────────
 
-    @Test("search returns [] immediately for empty query without running a script")
+    @Test("an empty query throws instead of silently matching everything")
     func searchEmptyQuery() async throws {
         let runner = FakeAppleScriptRunner()
-        let svc = MailService(runner: runner)
+        let svc = MailService(runner: runner, spotlight: nil)
 
-        let r = try await svc.search(query: "   ")
-
-        #expect(r.isEmpty)
+        // Previously this returned `[]`, which reads to a caller exactly
+        // like "no such mail". An empty query is a caller mistake and an
+        // unbounded scan, so it is refused before any backend runs.
+        await #expect(throws: MailQueryError.self) {
+            _ = try await svc.search(query: "   ")
+        }
         #expect(runner.calls.isEmpty)
     }
 
@@ -314,7 +317,9 @@ struct MailServiceTests {
         _ = try await svc.search(query: "she said \"hi\"", account: "iCloud")
 
         let src = runner.calls[0]
-        #expect(src.contains("\\\"hi\\\""))
+        // The quoted phrase becomes one term, escaped so it stays inside
+        // the AppleScript string literal.
+        #expect(src.contains("subject contains \"hi\""))
     }
 
     // ─── listMailboxes — more cases ────────────────────────────────────────

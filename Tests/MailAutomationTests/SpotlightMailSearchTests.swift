@@ -7,24 +7,35 @@ struct SpotlightMailSearchTests {
     // ─── predicate construction ────────────────────────────────────────────
 
     @Test("buildPredicate matches subject OR body case-insensitively")
-    func predicateSubjectOrBody() {
-        let p = SpotlightMailSearch.buildPredicate(query: "invoice", sinceDaysAgo: nil)
+    func predicateSubjectOrBody() throws {
+        let p = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("invoice"), sinceDaysAgo: nil)
         #expect(p.contains("kMDItemSubject == '*invoice*'c"))
         #expect(p.contains("kMDItemTextContent == '*invoice*'c"))
         #expect(p.contains("kMDItemKind == 'Mail Message'"))
     }
 
     @Test("buildPredicate appends a date bound when requested")
-    func predicateDateBound() {
-        let p = SpotlightMailSearch.buildPredicate(query: "q", sinceDaysAgo: 30)
+    func predicateDateBound() throws {
+        let p = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("q"), sinceDaysAgo: 30)
         #expect(p.contains("kMDItemContentCreationDate"))
         #expect(p.contains("$time.iso("))
     }
 
     @Test("buildPredicate escapes single quotes in the query")
-    func predicateEscapesQuotes() {
-        let p = SpotlightMailSearch.buildPredicate(query: "it's a test", sinceDaysAgo: nil)
-        #expect(p.contains("it\\'s a test"))
+    func predicateEscapesQuotes() throws {
+        // A bare phrase is three ANDed terms; assert the quote inside the
+        // first one is escaped so it can't terminate the mdfind literal.
+        let p = try SpotlightMailSearch.buildPredicate(
+            query: MailQuery.parse("it's a test"), sinceDaysAgo: nil
+        )
+        #expect(p.contains("it\\'s"))
+        #expect(!p.contains("'it's'"))
+
+        // And a quoted phrase stays one term, spaces intact.
+        let phrase = try SpotlightMailSearch.buildPredicate(
+            query: MailQuery.parse("\"it's a test\""), sinceDaysAgo: nil
+        )
+        #expect(phrase.contains("it\\'s a test"))
     }
 
     // ─── attr output parsing ───────────────────────────────────────────────
@@ -85,7 +96,7 @@ struct SpotlightMailSearchTests {
         }
         let search = SpotlightMailSearch(runner: runner)
 
-        let msgs = try await search.search(query: "hello", limit: 5, sinceDaysAgo: 30)
+        let msgs = try await search.search(query: MailQuery.parse("hello"), limit: 5, sinceDaysAgo: 30)
 
         #expect(msgs.count == 1)
         #expect(msgs[0].subject == "Hello")
@@ -102,8 +113,9 @@ struct SpotlightMailSearchTests {
         }
         let search = SpotlightMailSearch(runner: runner)
 
-        let msgs = try await search.search(query: "  ")
-        #expect(msgs.isEmpty)
+        await #expect(throws: MailQueryError.self) {
+            _ = try await search.search(query: MailQuery.parse("  "))
+        }
         let called = await box.called
         #expect(called == false)
     }
@@ -115,17 +127,17 @@ struct SpotlightMailSearchTests {
         let search = SpotlightMailSearch(runner: runner)
 
         await #expect(throws: Boom.self) {
-            _ = try await search.search(query: "x")
+            _ = try await search.search(query: MailQuery.parse("x"))
         }
     }
 
     @Test("buildPredicate omits the date bound when sinceDaysAgo is nil or <= 0")
-    func predicateNoDateBound() {
-        let pNil = SpotlightMailSearch.buildPredicate(query: "x", sinceDaysAgo: nil)
+    func predicateNoDateBound() throws {
+        let pNil = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("x"), sinceDaysAgo: nil)
         #expect(!pNil.contains("kMDItemContentCreationDate"))
-        let pZero = SpotlightMailSearch.buildPredicate(query: "x", sinceDaysAgo: 0)
+        let pZero = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("x"), sinceDaysAgo: 0)
         #expect(!pZero.contains("kMDItemContentCreationDate"))
-        let pNeg = SpotlightMailSearch.buildPredicate(query: "x", sinceDaysAgo: -5)
+        let pNeg = try SpotlightMailSearch.buildPredicate(query: MailQuery.parse("x"), sinceDaysAgo: -5)
         #expect(!pNeg.contains("kMDItemContentCreationDate"))
     }
 
@@ -174,7 +186,7 @@ struct SpotlightMailSearchTests {
     func defaultRunnerExecutes() async throws {
         let search = SpotlightMailSearch()
         let results = try await search.search(
-            query: "ZZXXYY_MailAutomation_Unlikely_Needle_\(UUID().uuidString)",
+            query: MailQuery.parse("ZZXXYY_MailAutomation_Unlikely_Needle_\(UUID().uuidString)"),
             limit: 1,
             sinceDaysAgo: 1
         )
@@ -182,13 +194,76 @@ struct SpotlightMailSearchTests {
     }
 
     @Test("process runner throws when the executable can't be launched")
-    func processRunnerLaunchFailureThrows() async {
+    func processRunnerLaunchFailureThrows() async throws {
         let runner = SpotlightMailSearch.makeProcessRunner(
             executableURL: URL(fileURLWithPath: "/definitely/not/a/binary-\(UUID().uuidString)")
         )
         await #expect(throws: (any Error).self) {
             _ = try await runner(["-help"])
         }
+    }
+
+    // ─── Ordering ──────────────────────────────────────────────────────────
+
+    @Test("parseAttrOutput returns hits newest-first regardless of mdfind order")
+    func attrOutputIsDateSorted() {
+        // mdfind's emission order is unspecified; feed it deliberately
+        // shuffled.
+        let raw = [
+            "/M/Old.mbox/Messages/1.emlx kMDItemSubject = \"Old\" kMDItemAuthors = (\"a@x\") kMDItemContentCreationDate = 2026-01-02 03:04:05 +0000",
+            "/M/New.mbox/Messages/2.emlx kMDItemSubject = \"Newest\" kMDItemAuthors = (\"b@x\") kMDItemContentCreationDate = 2026-08-14 09:00:00 +0000",
+            "/M/Mid.mbox/Messages/3.emlx kMDItemSubject = \"Middle\" kMDItemAuthors = (\"c@x\") kMDItemContentCreationDate = 2026-05-05 12:00:00 +0000",
+        ].joined(separator: "\n")
+
+        let out = SpotlightMailSearch.parseAttrOutput(raw, limit: 10)
+
+        #expect(out.map(\.subject) == ["Newest", "Middle", "Old"])
+    }
+
+    @Test("limit keeps the newest hits, not whichever mdfind emitted first")
+    func limitKeepsNewest() {
+        // The bug this guards: truncating in mdfind order drops newer
+        // matches in favour of older ones — the same defect the Mail.app
+        // backend had.
+        let raw = [
+            "/M/A.mbox/Messages/1.emlx kMDItemSubject = \"Old\" kMDItemAuthors = (\"a@x\") kMDItemContentCreationDate = 2026-01-02 03:04:05 +0000",
+            "/M/B.mbox/Messages/2.emlx kMDItemSubject = \"Older\" kMDItemAuthors = (\"b@x\") kMDItemContentCreationDate = 2025-01-02 03:04:05 +0000",
+            "/M/C.mbox/Messages/3.emlx kMDItemSubject = \"Newest\" kMDItemAuthors = (\"c@x\") kMDItemContentCreationDate = 2026-08-14 09:00:00 +0000",
+        ].joined(separator: "\n")
+
+        let out = SpotlightMailSearch.parseAttrOutput(raw, limit: 1)
+
+        #expect(out.map(\.subject) == ["Newest"])
+    }
+
+    @Test("undated hits sort last but are not dropped")
+    func undatedSortLast() {
+        let raw = [
+            "/M/A.mbox/Messages/1.emlx kMDItemSubject = \"NoDate\" kMDItemAuthors = (\"a@x\") kMDItemContentCreationDate = (null)",
+            "/M/B.mbox/Messages/2.emlx kMDItemSubject = \"Dated\" kMDItemAuthors = (\"b@x\") kMDItemContentCreationDate = 2026-08-14 09:00:00 +0000",
+        ].joined(separator: "\n")
+
+        let out = SpotlightMailSearch.parseAttrOutput(raw, limit: 10)
+
+        #expect(out.map(\.subject) == ["Dated", "NoDate"])
+    }
+
+    @Test("a non-positive limit yields nothing")
+    func nonPositiveLimit() {
+        let raw = "/M/A.mbox/Messages/1.emlx kMDItemSubject = \"X\" kMDItemAuthors = (\"a@x\") kMDItemContentCreationDate = 2026-08-14 09:00:00 +0000"
+        #expect(SpotlightMailSearch.parseAttrOutput(raw, limit: 0).isEmpty)
+    }
+
+    @Test("the mdfind timestamp parses under a non-US locale")
+    func dateParsingIsLocaleIndependent() {
+        // The format is mdfind's, not the user's — a locale-sensitive
+        // parser would return nil here on a non-US system and silently
+        // push every hit to the bottom of the sort.
+        #expect(SpotlightMailSearch.parseSpotlightDate("2026-08-14 09:00:00 +0000") != nil)
+        #expect(SpotlightMailSearch.parseSpotlightDate("2026-08-14 09:00:00") != nil)
+        #expect(SpotlightMailSearch.parseSpotlightDate("(null)") == nil)
+        #expect(SpotlightMailSearch.parseSpotlightDate("") == nil)
+        #expect(SpotlightMailSearch.parseSpotlightDate("not a date") == nil)
     }
 }
 
