@@ -26,6 +26,8 @@ struct MailBoundsTests {
             try await Task.sleep(for: delay)
             return reply
         }
+
+        func reset() { calls.removeAll() }
     }
 
     private var fastTimeouts: MailTimeouts {
@@ -311,5 +313,35 @@ struct MailBoundsTests {
     func indexAvailabilityIsVisible() {
         let runner = SlowRunner(delay: .zero)
         #expect(MailService(runner: runner, spotlight: nil).isIndexAvailable == false)
+    }
+
+    // ─── The same input must mean the same thing on every backend ──────────
+
+    @Test("sinceDaysAgo <= 0 drops the date bound instead of matching nothing")
+    func nonPositiveSinceDaysAgoDropsTheBound() async throws {
+        let runner = SlowRunner(delay: .zero)
+        let svc = MailService(runner: runner, spotlight: nil, timeouts: fastTimeouts)
+
+        for days in [0, -5] {
+            runner.reset()
+            _ = try await svc.search(query: "x", account: "Google", sinceDaysAgo: days)
+            let src = runner.calls[0]
+            // `now - 0 days` is `now`, which matches nothing — while the
+            // index and Spotlight backends read the same input as "no date
+            // bound". One input, one meaning.
+            #expect(!src.contains("date sent > cutoff"), "sinceDaysAgo=\(days) still bounds by date")
+            #expect(!src.contains("set cutoff to"), "sinceDaysAgo=\(days) still computes a cutoff")
+        }
+    }
+
+    @Test("a positive sinceDaysAgo still bounds by date")
+    func positiveSinceDaysAgoBounds() async throws {
+        let runner = SlowRunner(delay: .zero)
+        let svc = MailService(runner: runner, spotlight: nil, timeouts: fastTimeouts)
+
+        _ = try await svc.search(query: "x", account: "Google", sinceDaysAgo: 45)
+
+        #expect(runner.calls[0].contains("(45 * days)"))
+        #expect(runner.calls[0].contains("date sent > cutoff"))
     }
 }
