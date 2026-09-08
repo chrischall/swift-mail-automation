@@ -1,3 +1,11 @@
+# Thin config — the fleet-wide shape lives in chrischall/workflows.
+# Renders to: .github/dependabot.yml
+# Regenerate with: scripts/rollout.sh <owner/repo> --execute --only dependabot
+#
+# For repos with no npm or gradle manifest dependabot can read (Swift packages
+# built by xcodebuild, docs-only repos). The github-actions ecosystem is wanted
+# everywhere regardless of language — it is what keeps the fleet's pinned
+# action versions moving.
 version: 2
 updates:
   - package-ecosystem: github-actions
