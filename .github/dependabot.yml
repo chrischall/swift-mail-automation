@@ -13,6 +13,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # `ci`, not `fix`: an action version ships nothing to a consumer, so it
+    # belongs in the hidden CI section rather than cutting a patch release.
+    commit-message:
+      prefix: "ci"
+      include: "scope"
     groups:
       actions:
         update-types:
