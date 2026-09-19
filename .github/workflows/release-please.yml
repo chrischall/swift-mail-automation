@@ -1,10 +1,47 @@
 name: release-please
 
+# Thin stub: release-please itself runs in chrischall/workflows'
+# reusable-release-please.yml. What calling it buys is that a fix to release
+# behaviour reaches this repo instead of waiting for an 81-repo sweep — on
+# 2026-09-14 a transient GitHub API error lost release-please's
+# `release_created` output in three sibling repos AFTER each had already cut its
+# tag and GitHub Release, and the copied workflow had no way to finish the
+# release (chrischall/workflows#283).
+#
+# THERE IS NO PUBLISH JOB HERE, and that is not an omission. A Swift package is
+# consumed straight from the git tag, so the tag and the GitHub Release ARE the
+# release; there is no registry step for a lost `release_created` to strand.
+# Elsewhere in the fleet the publish job stays in the caller because npm trusted
+# publishing binds provenance to the repo's own workflow identity via OIDC —
+# this repo has nothing with that constraint, so the whole of its release-please
+# is the half that moved.
+#
+# Versioning policy did not move: `release-type: simple`, the v-prefixed tag and
+# the changelog sections stay in release-please-config.json, which the reusable
+# workflow reads out of this repo at the same paths the copy passed.
+
 on:
   push:
     branches: [main]
+  # A BLANK input is exactly the bare `workflow_dispatch` this file had before:
+  # release-please runs as it does on a push. A TAG skips release-please and has
+  # the reusable workflow validate that tag and resolve a bare version for a
+  # publish job to consume — which this repo does not have, so that form is a
+  # checked no-op here today. It is carried anyway because it can only live in
+  # the CALLER (a called workflow cannot declare its caller's triggers), so
+  # adding it later would mean editing this file under exactly the pressure the
+  # escape hatch exists to relieve.
   workflow_dispatch:
+    inputs:
+      republish_tag:
+        description: 'Existing tag to re-publish (e.g. v1.2.3). Blank = ordinary release-please run.'
+        required: false
+        type: string
+        default: ''
 
+# The ceiling for the called workflow's own job permissions, which is why they
+# are declared here as well as there: a reusable workflow can narrow what the
+# caller grants, never widen it.
 permissions:
   contents: write
   pull-requests: write
@@ -15,10 +52,10 @@ concurrency:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: googleapis/release-please-action@v5
-        with:
-          token: ${{ secrets.RELEASE_PAT }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+    uses: chrischall/workflows/.github/workflows/reusable-release-please.yml@main
+    with:
+      republish_tag: ${{ inputs.republish_tag }}
+    secrets:
+      # Not GITHUB_TOKEN: events a GITHUB_TOKEN causes do not trigger
+      # workflows, so the release PR would never get CI or a review.
+      release_pat: ${{ secrets.RELEASE_PAT }}
