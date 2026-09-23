@@ -24,9 +24,14 @@ public struct MailTimeouts: Sendable, Equatable {
     /// Whole-operation bound for a list/search/get.
     public var operationSeconds: Double
 
-    /// Whole-operation bound for a send. Higher than a read: an SMTP
-    /// handshake legitimately takes longer than an index lookup, and a
-    /// half-sent message is worse than a slow one.
+    /// Bound for a send. Higher than a read: an SMTP handshake
+    /// legitimately takes longer than an index lookup, and a half-sent
+    /// message is worse than a slow one.
+    ///
+    /// Applied per Apple Event inside the script, and in Swift only to the
+    /// wait for the script to *start*: a send that has started is awaited
+    /// rather than abandoned, because Mail may still deliver it and a
+    /// caller told `timedOut` would retry and send it twice.
     public var sendSeconds: Double
 
     public init(
@@ -136,5 +141,54 @@ func withTimeout<T: Sendable>(
     } onCancel: {
         work.cancel()
         box.resume(.failure(CancellationError()))
+    }
+}
+
+/// Records whether a script has started executing, so a caller whose bound
+/// expired can tell "never ran, and now never will" from "running — the
+/// outcome is still coming".
+///
+/// Passed to a runner as its `beforeExecute` hook via ``begin()``. Start
+/// and abandonment are decided under one lock, so exactly one wins: either
+/// the script starts and the caller must await it, or the caller abandons
+/// it and the hook throws, so it never runs.
+final class ScriptStartGate: @unchecked Sendable {
+    private enum State { case waiting, started, abandoned }
+
+    private let lock = NSLock()
+    private var state = State.waiting
+    /// Resolves when the script starts, or when the work ends without ever
+    /// starting (a failure before execution), so a waiter never hangs.
+    private let settled = MailTimeoutBox<Void>()
+
+    /// The runner's pre-execution hook. Throws `CancellationError` if the
+    /// caller abandoned the script first.
+    func begin() throws {
+        try lock.withLock {
+            guard state == .waiting else { throw CancellationError() }
+            state = .started
+        }
+        settled.resume(.success(()))
+    }
+
+    /// Called when the work ends, however it ends.
+    func finish() {
+        settled.resume(.success(()))
+    }
+
+    /// Abandons the script if it hasn't started. Returns `true` when the
+    /// script is guaranteed never to run, `false` when it already started.
+    func abandon() -> Bool {
+        lock.withLock {
+            if state == .waiting {
+                state = .abandoned
+            }
+            return state == .abandoned
+        }
+    }
+
+    /// Suspends until the script starts or the work ends.
+    func waitUntilSettled() async throws {
+        try await withCheckedThrowingContinuation { settled.attach($0) }
     }
 }

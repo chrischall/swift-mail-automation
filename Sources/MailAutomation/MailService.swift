@@ -304,7 +304,8 @@ public struct MailService: Sendable {
     /// preferred for everything; Spotlight is consulted when the index is
     /// unavailable *and* the query isn't scoped to an account or mailbox
     /// (Spotlight can't express those); AppleScript is the last resort and
-    /// is bounded on both sides.
+    /// is bounded on both sides. Every page of a query is answered by the
+    /// same backend, so paging with `offset` never mixes result sets.
     ///
     /// - Parameters:
     ///   - query: The search string. Supports multiple terms, `AND`/`OR`,
@@ -372,24 +373,34 @@ public struct MailService: Sendable {
         }
 
         // ── 2. Spotlight ──────────────────────────────────────────────────
-        // Can't scope by account/mailbox and can't page, so those force it
-        // out. It is the only backend that reads message bodies.
+        // Can't scope by account/mailbox, so that forces it out. It is the
+        // only backend that reads message bodies.
+        //
+        // Paging stays on Spotlight: a later page asks for `offset + limit`
+        // and drops the first `offset` after the global sort. Letting page 2
+        // fall through to AppleScript — which matches subject-or-sender
+        // rather than subject-or-body, and skips in mailbox order — returned
+        // a different result set per page, skipping and duplicating mail.
+        // The backend choice depends only on whether Spotlight has *any*
+        // hit, so every page of one query is answered by the same backend.
         let allowSpotlight: Bool = {
             if let forced = forceBackend {
                 return forced == .spotlight
             }
-            return spotlight != nil && !scoped && skip == 0
+            return spotlight != nil && !scoped
         }()
         if allowSpotlight, let spotlight {
+            let (window, overflow) = skip.addingReportingOverflow(maxN)
             let hits = try await withTimeout(
                 seconds: timeouts.operationSeconds, operation: "mail search (spotlight)"
             ) {
                 try await spotlight.search(
-                    query: parsed, limit: maxN, sinceDaysAgo: sinceDaysAgo
+                    query: parsed, limit: overflow ? Int.max : window,
+                    sinceDaysAgo: sinceDaysAgo
                 )
             }
             if !hits.isEmpty {
-                return hits
+                return Array(hits.dropFirst(skip).prefix(maxN))
             }
         }
         if forceBackend == .spotlight {
@@ -558,7 +569,10 @@ public struct MailService: Sendable {
     /// - Throws: `MailServiceError.invalidInput` when any required
     ///   parameter is empty; `MailServiceError.scriptFailure` if Mail
     ///   doesn't confirm the send; `AppleScriptError.runtime` for a
-    ///   permissions error or Mail not running.
+    ///   permissions error or Mail not running;
+    ///   ``MailServiceError/timedOut(operation:seconds:)`` only when the
+    ///   script never started within `sendSeconds` — it is then dropped,
+    ///   so nothing was sent and a retry cannot duplicate the message.
     public func send(
         to: String, subject: String, body: String,
         cc: String? = nil, bcc: String? = nil
@@ -574,7 +588,6 @@ public struct MailService: Sendable {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("apple-mcp-mail-\(UUID().uuidString).txt")
         try body.write(to: tmp, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tmp) }
 
         let esc: (String) -> String = { Self.escapeForAppleScript($0) }
         let subjectQ = esc(subject)
@@ -600,14 +613,47 @@ public struct MailService: Sendable {
             return "SENT"
         end tell
         """
-        let result = try await withTimeout(
-            seconds: timeouts.sendSeconds, operation: "mail send"
-        ) {
-            try await runner.run(source: timeouts.bound(source, seconds: Int(timeouts.sendSeconds)))
-        }
+        let result = try await runSend(timeouts.bound(source, seconds: Int(timeouts.sendSeconds)), bodyFile: tmp)
         guard result.trimmingCharacters(in: .whitespaces) == "SENT" else {
             throw MailServiceError.scriptFailure("Mail returned: \(result)")
         }
+    }
+
+    /// Runs a send script so that a timeout is never ambiguous.
+    ///
+    /// `sendSeconds` bounds only the wait for the script to **start** (on
+    /// the real runner, the wait for the main actor). A script that has not
+    /// started by then is abandoned and can never run, so `timedOut` means
+    /// "not sent" and a retry is safe. A script that has started is awaited
+    /// to completion — each of its Apple Events is still bounded by the
+    /// in-script `with timeout` — because Mail may deliver it: racing it
+    /// with a Swift timer used to report `timedOut` for mail that was then
+    /// sent, and a caller retrying on that error sent it twice.
+    ///
+    /// The body file is removed only once the script has finished or been
+    /// dropped, never while it may still be read.
+    private func runSend(_ source: String, bodyFile: URL) async throws -> String {
+        let gate = ScriptStartGate()
+        let runner = runner
+        let work = Task {
+            defer {
+                try? FileManager.default.removeItem(at: bodyFile)
+                gate.finish()
+            }
+            return try await runner.run(source: source, beforeExecute: { try gate.begin() })
+        }
+        do {
+            try await withTimeout(seconds: timeouts.sendSeconds, operation: "mail send") {
+                try await gate.waitUntilSettled()
+            }
+        } catch {
+            if gate.abandon() {
+                work.cancel()
+                throw error
+            }
+            // It started as the bound expired: its outcome is real, await it.
+        }
+        return try await work.value
     }
 
     // MARK: - Get full message
@@ -635,7 +681,8 @@ public struct MailService: Sendable {
     /// ``search(query:limit:account:mailbox:sinceDaysAgo:offset:forceBackend:)``).
     ///
     /// - Parameters:
-    ///   - id: The message's `Message-ID`. Empty/whitespace throws
+    ///   - id: The message's `Message-ID`, bare or `<bracketed>` — both
+    ///     forms find the same message. Empty/whitespace throws
     ///     ``MailServiceError/invalidInput(_:)`` without running a script.
     ///   - account: Optional account name to scope (and speed up) the
     ///     lookup. When `nil`, every account's mailboxes are searched,
@@ -670,7 +717,7 @@ public struct MailService: Sendable {
     /// can contain newlines/tabs, which is why the parser rejoins
     /// `fields[7...]` rather than taking a single element).
     static func getMessageScript(id: String, account: String? = nil) -> String {
-        let escId = escapeForAppleScript(id)
+        let escId = escapeForAppleScript(normalizeMessageID(id))
         let scope: String
         if let account, !account.isEmpty {
             let ea = escapeForAppleScript(account)
@@ -739,6 +786,21 @@ public struct MailService: Sendable {
             isRead: fields[6].lowercased() == "true",
             body: body
         )
+    }
+
+    /// The one canonical shape of a Message-ID: trimmed, with a single pair
+    /// of surrounding angle brackets removed.
+    ///
+    /// Mail's AppleScript `message id` property is the bare id
+    /// (`a@acme`), while the Envelope Index stores the raw header
+    /// (`<a@acme>`). Emitting the index's form made `search` →
+    /// `getMessage(id:)` match nothing, and made the id's shape depend on
+    /// which backend answered. Every id this package emits or looks up
+    /// goes through here.
+    static func normalizeMessageID(_ id: String) -> String {
+        let t = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count >= 2, t.hasPrefix("<"), t.hasSuffix(">") else { return t }
+        return String(t.dropFirst().dropLast())
     }
 
     // MARK: - AppleScript escaping

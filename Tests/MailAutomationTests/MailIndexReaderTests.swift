@@ -272,13 +272,16 @@ struct MailIndexReaderTests {
 
     // ─── Metadata ──────────────────────────────────────────────────────────
 
-    @Test("the RFC Message-ID comes through for get()")
+    @Test("the RFC Message-ID comes through for get(), bare like the AppleScript backend's")
     func messageIDPresent() async throws {
         try await withReader(seeds: standardSeeds) { reader in
             let out = try await reader.search(
                 query: MailQuery.parse("subject:\"Invoice 001\""), sinceDaysAgo: 365
             )
-            #expect(out.first?.messageId == "<a@acme>")
+            // The index stores the header with its angle brackets; Mail's
+            // AppleScript `message id` has none. Emitting it bracketed made
+            // search → getMessage(id:) find nothing.
+            #expect(out.first?.messageId == "a@acme")
         }
     }
 
