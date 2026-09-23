@@ -118,3 +118,90 @@ struct NSAppleScriptRunnerThreadAffinityTests {
         }
     }
 }
+
+/// A script whose caller has gone must not run.
+///
+/// `withTimeout` frees the caller and cancels the work, but the work is a
+/// hop onto the main actor that `MainActor.run` does not abandon on
+/// cancellation. Without a check at the head of the hop, every timed-out
+/// call still ran later, in order, keeping the main actor busy and timing
+/// out the calls queued behind it.
+@Suite("NSAppleScriptRunner cancellation", .serialized)
+struct NSAppleScriptRunnerCancellationTests {
+    /// Counts calls to the pre-execution hook, which runs on the main
+    /// thread immediately before `NSAppleScript` would execute.
+    final class HookCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        private var mainThread = true
+        func hit() {
+            lock.withLock {
+                count += 1
+                mainThread = mainThread && Thread.isMainThread
+            }
+        }
+
+        var hits: Int { lock.withLock { count } }
+        var allOnMain: Bool { lock.withLock { mainThread } }
+    }
+
+    private let script = """
+    on run
+        return "ran"
+    end run
+    """
+
+    @Test("a call whose task is already cancelled is dropped, not executed")
+    func cancelledBeforeHopIsDropped() async {
+        let runner = NSAppleScriptRunner()
+        let hook = HookCounter()
+        let source = script
+        let task = Task { () async throws -> String in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await runner.run(source: source, beforeExecute: { hook.hit() })
+        }
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(hook.hits == 0)
+    }
+
+    @Test("a call cancelled while queued behind a busy main actor is dropped when its turn comes")
+    func cancelledWhileQueuedIsDropped() async throws {
+        let runner = NSAppleScriptRunner()
+        let hook = HookCounter()
+        let source = script
+
+        // Occupy the main actor the way a slow AppleScript search does.
+        let busy = Task { @MainActor in _ = usleep(400_000) }
+        try await Task.sleep(for: .milliseconds(50))
+
+        let queued = Task { () async throws -> String in
+            try await runner.run(source: source, beforeExecute: { hook.hit() })
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        queued.cancel()
+
+        await #expect(throws: CancellationError.self) { _ = try await queued.value }
+        await busy.value
+        #expect(hook.hits == 0, "a script whose caller timed out must not run later")
+    }
+
+    @Test("an uncancelled call runs its hook on the main thread, then the script")
+    func hookRunsOnMainBeforeScript() async throws {
+        let runner = NSAppleScriptRunner()
+        let hook = HookCounter()
+
+        let out = try await runner.run(source: script, beforeExecute: { hook.hit() })
+
+        #expect(out == "ran")
+        #expect(hook.hits == 1)
+        #expect(hook.allOnMain)
+    }
+
+    @Test("a hook that throws stops the script and its error reaches the caller")
+    func throwingHookStopsScript() async {
+        let runner = NSAppleScriptRunner()
+        await #expect(throws: CancellationError.self) {
+            _ = try await runner.run(source: script, beforeExecute: { throw CancellationError() })
+        }
+    }
+}

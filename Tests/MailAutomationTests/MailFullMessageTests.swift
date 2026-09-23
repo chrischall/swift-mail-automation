@@ -59,8 +59,40 @@ struct MailFullMessageTests {
     func getScriptShape() {
         let s = MailService.getMessageScript(id: "<msg-42@host>")
         #expect(s.contains("tell application \"Mail\""))
-        #expect(s.contains("message id is \"<msg-42@host>\""))
+        // Mail's AppleScript `message id` is the bare id: the brackets an
+        // index-sourced id carries would make the `whose` match nothing.
+        #expect(s.contains("message id is \"msg-42@host\""))
         #expect(s.contains("content of"))
+    }
+
+    @Test("an index-shaped <bracketed> id and a bare one build the same lookup")
+    func getScriptNormalisesBrackets() {
+        #expect(
+            MailService.getMessageScript(id: "<a@acme>")
+                == MailService.getMessageScript(id: "a@acme")
+        )
+        #expect(MailService.getMessageScript(id: "  <a@acme> ").contains("message id is \"a@acme\""))
+    }
+
+    @Test("normalizeMessageID strips one pair of surrounding angle brackets and whitespace")
+    func normalizeMessageID() {
+        #expect(MailService.normalizeMessageID("<a@acme>") == "a@acme")
+        #expect(MailService.normalizeMessageID("a@acme") == "a@acme")
+        #expect(MailService.normalizeMessageID("  <a@acme>\n") == "a@acme")
+        #expect(MailService.normalizeMessageID("<a@acme") == "<a@acme")
+        #expect(MailService.normalizeMessageID("") == "")
+    }
+
+    @Test("getMessage with an index-sourced id looks it up bare")
+    func getMessageWithIndexShapedID() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue(["a@acme", "S", "f@x", "Mon", "INBOX", "", "true", "b"].joined(separator: sep))
+        let svc = MailService(runner: runner, spotlight: nil)
+
+        let d = try await svc.getMessage(id: "<a@acme>")
+
+        #expect(runner.calls[0].contains("message id is \"a@acme\""))
+        #expect(d.messageId == "a@acme")
     }
 
     @Test("getMessageScript escapes quotes/backslashes in the id")

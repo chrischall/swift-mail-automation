@@ -16,6 +16,33 @@ public protocol AppleScriptRunner: Sendable {
     ///   `AppleScriptError.runtime` if execution fails (app not running,
     ///   Automation permission denied, script-level error, …).
     func run(source: String) async throws -> String
+
+    /// Execute `source`, first calling `beforeExecute` at the last moment
+    /// the script can still be abandoned.
+    ///
+    /// The hook is the runner's promise about *when* execution begins: if
+    /// it returns, the script runs; if it throws, the script does not run
+    /// and the error propagates. ``MailService/send(to:subject:body:cc:bcc:)``
+    /// uses it to tell a send that never started (safe to report as timed
+    /// out) from one that did (must be awaited — Mail may deliver it).
+    ///
+    /// Has a default implementation that calls the hook and then
+    /// ``run(source:)``, which is correct for any runner that begins
+    /// executing as soon as it is called.
+    func run(
+        source: String,
+        beforeExecute: @escaping @Sendable () throws -> Void
+    ) async throws -> String
+}
+
+public extension AppleScriptRunner {
+    func run(
+        source: String,
+        beforeExecute: @escaping @Sendable () throws -> Void
+    ) async throws -> String {
+        try beforeExecute()
+        return try await run(source: source)
+    }
 }
 
 /// Errors surfaced by an `AppleScriptRunner` execution.

@@ -397,7 +397,7 @@ public actor MailIndexReader {
                 content: "",
                 isRead: row.isRead,
                 mailbox: acct.isEmpty ? mbName : "\(acct) — \(mbName)",
-                messageId: row.rfcID
+                messageId: MailService.normalizeMessageID(row.rfcID)
             )
         }
     }

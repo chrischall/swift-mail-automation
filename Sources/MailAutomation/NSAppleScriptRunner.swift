@@ -32,7 +32,8 @@ import OSAKit
 /// ## Consequences for callers
 ///
 /// ``run(source:)`` occupies the main actor for the script's duration,
-/// so AppleScript calls serialize. That is correct regardless:
+/// so AppleScript calls serialize. A call whose task is cancelled while it
+/// waits its turn is dropped rather than run late. That is correct regardless:
 /// `NSAppleScript` is neither `Sendable` nor reentrant, and a single
 /// application serializes the events it receives anyway.
 public struct NSAppleScriptRunner: AppleScriptRunner {
@@ -57,11 +58,39 @@ public struct NSAppleScriptRunner: AppleScriptRunner {
     /// the script can't be constructed, `.runtime` if AppleScript
     /// signals an error during execution (typically: application not
     /// running, user denied the automation permission prompt, or the
-    /// script referenced something that doesn't exist).
+    /// script referenced something that doesn't exist), and
+    /// `CancellationError` if the calling task was cancelled before the
+    /// script started.
     public func run(source: String) async throws -> String {
+        try await run(source: source, beforeExecute: {})
+    }
+
+    /// Compile and execute `source` on the main thread, calling
+    /// `beforeExecute` on the main thread immediately before execution.
+    ///
+    /// ## Cancellation
+    ///
+    /// A cancelled task's script is **dropped, not run**. The check sits
+    /// inside the main-thread hop because that is where the wait is:
+    /// `MainActor.run` does not abandon a queued hop when its task is
+    /// cancelled, and a slow script holds the main actor for minutes. When
+    /// ``withTimeout(seconds:operation:_:)`` gave up on a caller, its
+    /// script used to run anyway once it reached the front — keeping the
+    /// main actor busy for no one, and timing out every call queued behind
+    /// it. Once a script has started it cannot be interrupted:
+    /// `executeAndReturnError` is synchronous.
+    public func run(
+        source: String,
+        beforeExecute: @escaping @Sendable () throws -> Void
+    ) async throws -> String {
+        try Task.checkCancellation()
         // NSAppleScript isn't Sendable; construct + execute it entirely
         // inside the hop so its lifecycle stays on one thread.
-        try await Self.onMainThread { () throws -> String in
+        return try await Self.onMainThread { () throws -> String in
+            // `MainActor.run` executes in the caller's task, so this sees
+            // a cancellation that arrived while the hop was queued.
+            try Task.checkCancellation()
+            try beforeExecute()
             guard let script = NSAppleScript(source: source) else {
                 throw AppleScriptError.compile("Failed to construct NSAppleScript")
             }
