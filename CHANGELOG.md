@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/chrischall/swift-mail-automation/compare/v1.2.0...v1.2.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **mail:** make search paging, message ids, and timeouts behave the same on every path ([#62](https://github.com/chrischall/swift-mail-automation/issues/62)) ([1a933dc](https://github.com/chrischall/swift-mail-automation/commit/1a933dc14530ea6e7a03c04ecbe93af48fd0e8b5))
+
 ## [1.2.0](https://github.com/chrischall/swift-mail-automation/compare/v1.1.4...v1.2.0) (2026-08-15)
 
 
