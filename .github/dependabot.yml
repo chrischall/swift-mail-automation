@@ -23,3 +23,16 @@ updates:
         update-types:
           - minor
           - patch
+      actions-majors:
+        update-types:
+          - major
+      # SECURITY fixes, as ONE PR per update entry. `applies-to` is what
+      # scopes it: a group without that key defaults to version-updates, so
+      # none of the groups above ever collects an advisory, and this one never
+      # collects a routine bump. `*` rather than a dependency type so a
+      # same-day advisory across runtime and dev dependencies still lands as a
+      # single PR.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
