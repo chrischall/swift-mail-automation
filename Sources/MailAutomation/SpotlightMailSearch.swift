@@ -332,19 +332,31 @@ public struct SpotlightMailSearch: Sendable {
                 throw error
             }
 
-            // Read both pipes to EOF off the calling thread before waiting
-            // on exit. Reading to EOF is what lets the child finish — the
-            // read must continue past the cap even though the excess is
-            // discarded, or the child blocks in write() forever.
-            async let out = Self.readToEnd(
-                outPipe.fileHandleForReading, keeping: maxOutputBytes
-            )
-            async let err = Self.readToEnd(
-                errPipe.fileHandleForReading, keeping: 0
-            )
-            let (stdout, _) = await (out, err)
-
-            task.waitUntilExit()
+            // A caller that gave up (`withTimeout` cancels its work) kills
+            // the child. Otherwise a broad query that outran its bound kept
+            // `mdfind` running to completion, holding two GCD threads in the
+            // pipe reads, and repeated timeouts piled both up. Killing it
+            // closes the pipes, so the reads below reach EOF and return.
+            let child = ChildProcess(task)
+            let stdout = await withTaskCancellationHandler {
+                // Read both pipes to EOF off the calling thread before
+                // waiting on exit. Reading to EOF is what lets the child
+                // finish — the read must continue past the cap even though
+                // the excess is discarded, or the child blocks in write()
+                // forever.
+                async let out = Self.readToEnd(
+                    outPipe.fileHandleForReading, keeping: maxOutputBytes
+                )
+                async let err = Self.readToEnd(
+                    errPipe.fileHandleForReading, keeping: 0
+                )
+                let (stdout, _) = await (out, err)
+                task.waitUntilExit()
+                return stdout
+            } onCancel: {
+                child.terminate()
+            }
+            try Task.checkCancellation()
 
             if stdout.truncated {
                 throw MailServiceError.tooBroad(
@@ -356,6 +368,18 @@ public struct SpotlightMailSearch: Sendable {
             // Lossy conversion, not `?? ""`: a byte the decoder dislikes
             // must not turn a full read into a silent zero-result success.
             return String(decoding: stdout.data, as: UTF8.self)
+        }
+    }
+
+    /// Lets a cancellation handler signal a `Process` it does not own.
+    /// `Process` is thread-safe for `terminate()` but not `Sendable`.
+    private final class ChildProcess: @unchecked Sendable {
+        private let process: Process
+        init(_ process: Process) { self.process = process }
+        func terminate() {
+            if process.isRunning {
+                process.terminate()
+            }
         }
     }
 

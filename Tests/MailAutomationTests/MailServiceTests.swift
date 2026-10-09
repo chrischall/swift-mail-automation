@@ -281,11 +281,11 @@ struct MailServiceTests {
 
     @Test("search forceBackend=.spotlight never falls back to AppleScript when Spotlight returns empty")
     func searchForcesSpotlight() async throws {
-        // Wire a MailService with no Spotlight backend (nil) — calling
-        // search(forceBackend: .spotlight) should return [] without
-        // touching the runner.
+        // Spotlight is configured and genuinely finds nothing: that empty
+        // answer is the answer, with no AppleScript fallback.
         let runner = FakeAppleScriptRunner()
-        let svc = MailService(runner: runner, spotlight: nil)
+        let spotlight = SpotlightMailSearch(runner: { _ in "" })
+        let svc = MailService(runner: runner, spotlight: spotlight)
 
         let results = try await svc.search(
             query: "invoice",
@@ -293,6 +293,26 @@ struct MailServiceTests {
         )
 
         #expect(results.isEmpty)
+        #expect(runner.calls.isEmpty, "should never consult AppleScript when backend is forced to spotlight")
+    }
+
+    @Test("search forceBackend=.spotlight with no Spotlight configured throws instead of reporting no mail")
+    func searchForcedSpotlightUnavailableThrows() async throws {
+        // No Spotlight backend at all (sandboxed init): an empty array
+        // would claim "no matching mail" from a backend that never ran.
+        let runner = FakeAppleScriptRunner()
+        let svc = MailService(runner: runner, spotlight: nil)
+
+        do {
+            _ = try await svc.search(query: "invoice", forceBackend: .spotlight)
+            Issue.record("expected a tooBroad error")
+        } catch let e as MailServiceError {
+            guard case let .tooBroad(msg) = e else {
+                Issue.record("expected .tooBroad, got \(e)")
+                return
+            }
+            #expect(msg.contains("Spotlight"))
+        }
         #expect(runner.calls.isEmpty, "should never consult AppleScript when backend is forced to spotlight")
     }
 
@@ -661,6 +681,32 @@ struct MailServiceTests {
         let src = runner.calls[0]
         #expect(src.contains("my sanitize(name of m)"))
         #expect(src.contains("my sanitize(acctName)"))
+    }
+
+    // An unscoped AppleScript search or lookup must still say which
+    // account each hit came from: the index and unread paths emit
+    // "Account — Mailbox", and a bare "INBOX" is ambiguous across accounts.
+
+    @Test("unscoped AppleScript search labels each hit with its own account")
+    func unscopedSearchKnowsAccount() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner, spotlight: nil)
+
+        _ = try await svc.search(query: "q", forceBackend: .applescript)
+
+        let src = runner.calls[0]
+        #expect(src.contains("set acctName to name of a"))
+        #expect(!src.contains("set acctName to \"\""), "unscoped search drops the account label")
+        #expect(!src.contains("whose mailboxes contains"), "account must not be resolved per mailbox")
+    }
+
+    @Test("unscoped getMessage labels the hit with its own account")
+    func unscopedGetMessageKnowsAccount() {
+        let src = MailService.getMessageScript(id: "a@acme")
+        #expect(src.contains("set acctName to name of a"))
+        #expect(!src.contains("set acctName to \"\""), "unscoped lookup drops the account label")
+        #expect(!src.contains("whose mailboxes contains"), "account must not be resolved per mailbox")
     }
 
     @Test("search routes mailbox and account name through sanitize before emitting")

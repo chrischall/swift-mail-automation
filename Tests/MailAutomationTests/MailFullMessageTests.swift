@@ -104,7 +104,7 @@ struct MailFullMessageTests {
     @Test("getMessageScript scopes to one account when given, escaped")
     func getScriptAccountScope() {
         let s = MailService.getMessageScript(id: "<msg-1@x>", account: "Wo\"rk")
-        #expect(s.contains("mailboxes of (first account whose name is \"Wo\\\"rk\")"))
+        #expect(s.contains("set acctList to {first account whose name is \"Wo\\\"rk\"}"))
         // Scoped scripts must not fall back to iterating every account.
         #expect(!s.contains("repeat with a in accounts"))
     }
