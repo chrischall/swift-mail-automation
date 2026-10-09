@@ -11,9 +11,16 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
     ],
     targets: [
+        // Swift can't call variadic C functions such as `sqlite3_db_config`;
+        // this shim exposes the one option the index reader needs.
+        .target(
+            name: "CMailSQLite",
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
         .target(
             name: "MailAutomation",
             dependencies: [
+                "CMailSQLite",
                 .product(name: "Logging", package: "swift-log"),
             ]
         ),

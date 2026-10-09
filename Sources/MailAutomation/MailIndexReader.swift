@@ -1,3 +1,4 @@
+import CMailSQLite
 import Foundation
 import SQLite3
 
@@ -57,7 +58,18 @@ public enum MailIndexReaderError: Error, Equatable, Sendable {
 /// handle read-write + `PRAGMA query_only = 1`; Mail commits through WAL
 /// while we read, and a long-lived read-only handle can't refresh its
 /// snapshot (it can't write the `-shm` file that coordinates one), so it
-/// would serve staler and staler results the longer the server ran.
+/// would serve staler and staler results the longer the server ran. A
+/// read-only handle also can't open a WAL-mode store whose `-wal` file
+/// Mail removed on a clean quit.
+///
+/// ## Never writing Mail's store
+///
+/// `query_only` blocks SQL writes, but not the checkpoint SQLite runs when
+/// the *last* connection to a WAL database closes: with Mail not running,
+/// that would fold Mail's un-checkpointed WAL into its database file and
+/// delete the WAL — mutating another app's store on every search. Each
+/// handle therefore also sets `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`, and its
+/// failure is fatal like the pragma's.
 ///
 /// ## Schema assumptions
 ///
@@ -126,9 +138,10 @@ public actor MailIndexReader {
     /// Opens a fresh SQLite handle for one query. Callers must close it.
     ///
     /// Read-write + `PRAGMA query_only = 1` rather than
-    /// `SQLITE_OPEN_READONLY`, for the WAL-refresh reason in the type docs.
-    /// The pragma is the guardrail that keeps a writable handle from ever
-    /// mutating Mail's index, so its failure is fatal, never swallowed.
+    /// `SQLITE_OPEN_READONLY`, for the WAL reasons in the type docs. The
+    /// pragma and no-checkpoint-on-close together are the guardrail that
+    /// keeps a writable handle from ever mutating Mail's index, so either
+    /// failing is fatal, never swallowed.
     private static func openHandle(path: String) throws -> OpaquePointer {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX
@@ -143,6 +156,13 @@ public actor MailIndexReader {
                 "Cannot open \(path): \(msg). On macOS, grant Full Disk Access " +
                     "to the calling binary in System Settings → Privacy & Security → " +
                     "Full Disk Access."
+            )
+        }
+        guard cmail_sqlite_disable_checkpoint_on_close(handle) == SQLITE_OK else {
+            sqlite3_close_v2(handle)
+            throw MailIndexReaderError.databaseNotAccessible(
+                "Failed to disable checkpoint-on-close on \(path). Refusing to " +
+                    "return a handle that could rewrite Mail's index when it closes."
             )
         }
         let pragmaRC = sqlite3_exec(handle, "PRAGMA query_only = 1", nil, nil, nil)
