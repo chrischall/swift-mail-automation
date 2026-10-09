@@ -96,7 +96,7 @@ struct MailIndexFixture {
             subjectIDs[s] = id
             return id
         }
-        /// Splits `"Name <addr>"` back into the two columns Mail stores.
+        // Splits `"Name <addr>"` back into the two columns Mail stores.
         func addressID(_ s: String) throws -> Int {
             if let id = addressIDs[s] {
                 return id
