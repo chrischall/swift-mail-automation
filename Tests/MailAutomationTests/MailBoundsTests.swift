@@ -370,6 +370,35 @@ struct MailBoundsTests {
         #expect(runner.calls.count == 1, "AppleScript should have answered after the index failed")
     }
 
+    @Test("a later page surfaces an index query error instead of switching backend mid-query")
+    func indexErrorOnLaterPageIsSurfaced() async throws {
+        let (reader, fixture) = try brokenIndex()
+        defer { fixture.tearDown() }
+        let runner = SlowRunner(delay: .zero)
+        let svc = MailService(runner: runner, spotlight: nil, index: reader, timeouts: fastTimeouts)
+
+        // Page 1 of this query would have come from the index. Answering
+        // page 2 from AppleScript — a different match rule and ordering —
+        // would skip and duplicate mail across pages.
+        await #expect(throws: MailIndexReaderError.self) {
+            _ = try await svc.search(query: "x", offset: 20)
+        }
+        #expect(runner.calls.isEmpty)
+    }
+
+    @Test("a later getUnread page surfaces an index query error too")
+    func indexErrorOnLaterUnreadPageIsSurfaced() async throws {
+        let (reader, fixture) = try brokenIndex()
+        defer { fixture.tearDown() }
+        let runner = SlowRunner(delay: .zero)
+        let svc = MailService(runner: runner, spotlight: nil, index: reader, timeouts: fastTimeouts)
+
+        await #expect(throws: MailIndexReaderError.self) {
+            _ = try await svc.getUnread(offset: 10)
+        }
+        #expect(runner.calls.isEmpty)
+    }
+
     @Test("forcing the index backend still surfaces an index query error")
     func forcedIndexErrorIsSurfaced() async throws {
         let (reader, fixture) = try brokenIndex()
