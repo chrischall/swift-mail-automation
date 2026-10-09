@@ -168,6 +168,30 @@ struct MailBoundsTests {
         }
     }
 
+    @Test("handler definitions sit outside the `with timeout` block, where AppleScript allows them")
+    func handlersOutsideTimeoutBlock() async {
+        // AppleScript rejects a handler defined inside `with timeout`
+        // ("Expected "end" but found "on"", -2741), so a script wrapped
+        // whole never compiles and every call through it fails.
+        let runner = SlowRunner(delay: .zero, reply: "SENT")
+        let svc = MailService(runner: runner, spotlight: nil, timeouts: fastTimeouts)
+
+        _ = try? await svc.search(query: "x")
+        _ = try? await svc.search(query: "x", account: "Google", mailbox: "INBOX")
+        _ = try? await svc.getUnread()
+        _ = try? await svc.getMessage(id: "<a@b>")
+        _ = try? await svc.listMailboxes(account: "Google")
+
+        #expect(runner.calls.count == 5)
+        for (i, call) in runner.calls.enumerated() {
+            let lines = call.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            let end = lines.lastIndex(of: "end timeout") ?? -1
+            for (n, line) in lines.enumerated() where line.range(of: #"^on \w+\("#, options: .regularExpression) != nil {
+                #expect(n > end, "script \(i) defines `\(line)` inside the timeout block")
+            }
+        }
+    }
+
     @Test("the search script no longer swallows a failing mailbox")
     func noSwallowingTryAroundTheWhoseClause() async throws {
         let runner = SlowRunner(delay: .zero)

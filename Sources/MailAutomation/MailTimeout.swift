@@ -50,14 +50,31 @@ public struct MailTimeouts: Sendable, Equatable {
 
     /// Wraps AppleScript source in `with timeout of N seconds`.
     ///
-    /// Applied at the outermost level so it covers every event the script
-    /// sends, including ones inside handlers it calls.
+    /// Applied at the outermost level of the script's top-level statements,
+    /// so it covers every event they send. Handler definitions (`on name(…)`
+    /// … `end name`) are moved after the block: AppleScript can't define a
+    /// handler inside one, and a script wrapped whole fails to compile
+    /// ("Expected "end" but found "on"", -2741), so every call through it
+    /// fails. The handlers this package generates only reshape text and
+    /// send no Apple Events.
     func bound(_ source: String, seconds: Int? = nil) -> String {
-        """
+        let lines = source.components(separatedBy: "\n")
+        let firstHandler = lines.firstIndex(where: Self.isHandlerDefinition) ?? lines.count
+        let statements = lines[..<firstHandler].joined(separator: "\n")
+        let handlers = lines[firstHandler...].joined(separator: "\n")
+        return """
         with timeout of \(seconds ?? perEventSeconds) seconds
-        \(source)
+        \(statements)
         end timeout
+        \(handlers)
         """
+    }
+
+    /// Whether a line opens a handler definition (`on sanitize(s)`), as
+    /// opposed to an `on error` clause inside a `try`.
+    private static func isHandlerDefinition(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces)
+            .range(of: #"^on \w+\("#, options: .regularExpression) != nil
     }
 }
 
