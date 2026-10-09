@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.2](https://github.com/chrischall/swift-mail-automation/compare/v1.2.1...v1.2.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* keep every page of a search on the same backend when the mail index fails ([#68](https://github.com/chrischall/swift-mail-automation/issues/68)) ([e8764e8](https://github.com/chrischall/swift-mail-automation/commit/e8764e8cab6555cbf15b4dbbe28e28b728558a86))
+* resolve low-severity audit findings in the Mail index, Spotlight and AppleScript backends ([#65](https://github.com/chrischall/swift-mail-automation/issues/65)) ([27ca162](https://github.com/chrischall/swift-mail-automation/commit/27ca162d9cb3c291065931cd4fbb7cb3b6068bc3))
+
 ## [1.2.1](https://github.com/chrischall/swift-mail-automation/compare/v1.2.0...v1.2.1) (2026-09-23)
 
 
