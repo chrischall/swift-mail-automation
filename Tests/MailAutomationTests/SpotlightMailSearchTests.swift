@@ -306,6 +306,38 @@ struct SpotlightMailSearchTests {
         #expect(out == payload)
     }
 
+    @Test("cancelling the caller kills the child process instead of leaving it running")
+    func cancellationKillsChild() async throws {
+        // withTimeout cancels the work on timeout. Before, the runner kept
+        // waiting on the child regardless, so every timed-out broad query
+        // left an mdfind and two blocked GCD threads behind.
+        let marker = "7.\(Int.random(in: 100_000 ... 999_999))"
+        let runner = SpotlightMailSearch.makeProcessRunner(
+            executableURL: URL(fileURLWithPath: "/bin/sleep")
+        )
+        let started = ContinuousClock.now
+        let work = Task { try await runner([marker]) }
+        try await Task.sleep(for: .milliseconds(200))
+        work.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await work.value
+        }
+        #expect(ContinuousClock.now - started < .seconds(3), "the runner waited for the child to finish")
+        #expect(!Self.processRunning(matching: "sleep \(marker)"), "the child is still running")
+    }
+
+    /// Whether a process whose command line matches `pattern` is alive.
+    private static func processRunning(matching pattern: String) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-f", pattern]
+        p.standardOutput = FileHandle.nullDevice
+        try? p.run()
+        p.waitUntilExit()
+        return p.terminationStatus == 0
+    }
+
     /// Writes `contents` to a throwaway file and returns its URL.
     private static func tempFile(containing contents: String) throws -> URL {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
