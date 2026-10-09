@@ -2,12 +2,47 @@
 # Renders to: .github/dependabot.yml
 # Regenerate with: scripts/rollout.sh <owner/repo> --execute --only dependabot
 #
-# For repos with no npm or gradle manifest dependabot can read (Swift packages
-# built by xcodebuild, docs-only repos). The github-actions ecosystem is wanted
-# everywhere regardless of language — it is what keeps the fleet's pinned
-# action versions moving.
+# For repos with a root Package.swift. Dependabot's `swift` ecosystem reads
+# Package.swift and Package.resolved; a package built only by an Xcode project
+# has neither and stays on the actions-only variant.
+#
+# SwiftPM has no development/production split dependabot understands, so the
+# groups are by update type alone and every bump is `fix`: whatever the
+# package resolves is what it ships.
 version: 2
 updates:
+  - package-ecosystem: swift
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    # Dependabot INFERS a commit prefix from recent history when this is unset.
+    # Setting it makes the release behaviour deterministic: `fix` cuts a patch
+    # release, and release-please reads the squash subject, which is this.
+    commit-message:
+      prefix: "fix"
+      include: "scope"
+    groups:
+      swift-dependencies:
+        update-types:
+          - minor
+          - patch
+      # A major is never a drive-by merge, but a week's majors are one PR to
+      # review rather than one PR each.
+      majors:
+        update-types:
+          - major
+      # SECURITY fixes, as ONE PR per update entry. `applies-to` is what
+      # scopes it: a group without that key defaults to version-updates, so
+      # none of the groups above ever collects an advisory, and this one never
+      # collects a routine bump. `*` rather than a dependency type so a
+      # same-day advisory across runtime and dev dependencies still lands as a
+      # single PR.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
