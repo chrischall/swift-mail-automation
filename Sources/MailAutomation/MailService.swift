@@ -421,6 +421,14 @@ public struct MailService: Sendable {
             }
         }
         if forceBackend == .spotlight {
+            // An empty array is only an answer if Spotlight actually ran.
+            // Without one configured it would read as "no matching mail".
+            guard spotlight != nil else {
+                throw MailServiceError.tooBroad(
+                    "Spotlight search is unavailable in this configuration, so this " +
+                        "query can't be answered by it. Search without forcing a backend."
+                )
+            }
             return []
         }
 
