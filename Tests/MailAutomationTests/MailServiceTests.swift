@@ -683,6 +683,32 @@ struct MailServiceTests {
         #expect(src.contains("my sanitize(acctName)"))
     }
 
+    // An unscoped AppleScript search or lookup must still say which
+    // account each hit came from: the index and unread paths emit
+    // "Account — Mailbox", and a bare "INBOX" is ambiguous across accounts.
+
+    @Test("unscoped AppleScript search labels each hit with its own account")
+    func unscopedSearchKnowsAccount() async throws {
+        let runner = FakeAppleScriptRunner()
+        runner.queue("")
+        let svc = MailService(runner: runner, spotlight: nil)
+
+        _ = try await svc.search(query: "q", forceBackend: .applescript)
+
+        let src = runner.calls[0]
+        #expect(src.contains("set acctName to name of a"))
+        #expect(!src.contains("set acctName to \"\""), "unscoped search drops the account label")
+        #expect(!src.contains("whose mailboxes contains"), "account must not be resolved per mailbox")
+    }
+
+    @Test("unscoped getMessage labels the hit with its own account")
+    func unscopedGetMessageKnowsAccount() {
+        let src = MailService.getMessageScript(id: "a@acme")
+        #expect(src.contains("set acctName to name of a"))
+        #expect(!src.contains("set acctName to \"\""), "unscoped lookup drops the account label")
+        #expect(!src.contains("whose mailboxes contains"), "account must not be resolved per mailbox")
+    }
+
     @Test("search routes mailbox and account name through sanitize before emitting")
     func searchSanitizesMailboxAndAccountName() async throws {
         let runner = FakeAppleScriptRunner()

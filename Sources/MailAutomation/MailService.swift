@@ -476,36 +476,30 @@ public struct MailService: Sendable {
             throw e
         }
 
-        let mailboxScope: String
+        // Walked account by account so every hit knows its account. The old
+        // unscoped path flattened every account's mailboxes into one list
+        // and emitted an empty account name, so a bare "INBOX" couldn't say
+        // which account it came from — while the index and unread paths
+        // emit "Account — Mailbox". Resolving the account per mailbox
+        // instead (`first account whose mailboxes contains m`) makes Mail
+        // enumerate every mailbox of every account on each iteration.
+        //
+        // A mailbox scope applies only together with an account, as before.
+        let acctScope: String
+        let mbScope: String
         if let account, !account.isEmpty {
             let ea = Self.escapeForAppleScript(account)
+            acctScope = "set acctList to {first account whose name is \"\(ea)\"}"
             if let mailbox, !mailbox.isEmpty {
                 let em = Self.escapeForAppleScript(mailbox)
-                mailboxScope = """
-                set targetAcct to first account whose name is "\(ea)"
-                set mbList to {first mailbox of targetAcct whose name is "\(em)"}
-                """
+                mbScope = "set mbList to {first mailbox of a whose name is \"\(em)\"}"
             } else {
-                mailboxScope = """
-                set targetAcct to first account whose name is "\(ea)"
-                set mbList to mailboxes of targetAcct
-                """
+                mbScope = "set mbList to mailboxes of a"
             }
         } else {
-            mailboxScope = """
-            set mbList to {}
-            repeat with a in accounts
-                set mbList to mbList & mailboxes of a
-            end repeat
-            """
+            acctScope = "set acctList to accounts"
+            mbScope = "set mbList to mailboxes of a"
         }
-
-        // The account name is resolved once, not once per mailbox: the old
-        // `first account whose mailboxes contains m` ran inside the loop and
-        // made Mail enumerate every mailbox of every account each time.
-        let acctResolve = (account?.isEmpty == false)
-            ? "set acctName to \"\(Self.escapeForAppleScript(account!))\""
-            : "set acctName to \"\""
 
         // A non-positive `sinceDaysAgo` means "no date bound" on the index
         // and Spotlight backends. Computing `now - 0` here instead would
@@ -522,29 +516,33 @@ public struct MailService: Sendable {
             set out to ""
             set found to 0
             set skipped to 0
-            \(mailboxScope)
-            \(acctResolve)
-            repeat with m in mbList
+            \(acctScope)
+            repeat with a in acctList
                 if found \u{2265} \(maxN) then exit repeat
-                set matchMsgs to (messages of m whose \(predicate)\(dateClause))
-                repeat with msg in matchMsgs
+                set acctName to name of a
+                \(mbScope)
+                repeat with m in mbList
                     if found \u{2265} \(maxN) then exit repeat
-                    if skipped < \(skip) then
-                        set skipped to skipped + 1
-                    else
-                        set subj to subject of msg
-                        set sndr to sender of msg
-                        set dateStr to (date sent of msg) as string
-                        set d to date sent of msg
-                        set sortKey to (year of d as string) & "-" & my pad2(month of d as integer) & "-" & my pad2(day of d) & "T" & my pad2(hours of d) & ":" & my pad2(minutes of d) & ":" & my pad2(seconds of d)
-                        set isRead to read status of msg
-                        set mid to ""
-                        try
-                            set mid to message id of msg
-                        end try
-                        set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & (isRead as string) & "\t" & "" & "\t" & my sanitize(mid) & "\t" & (sortKey as string) & linefeed
-                        set found to found + 1
-                    end if
+                    set matchMsgs to (messages of m whose \(predicate)\(dateClause))
+                    repeat with msg in matchMsgs
+                        if found \u{2265} \(maxN) then exit repeat
+                        if skipped < \(skip) then
+                            set skipped to skipped + 1
+                        else
+                            set subj to subject of msg
+                            set sndr to sender of msg
+                            set dateStr to (date sent of msg) as string
+                            set d to date sent of msg
+                            set sortKey to (year of d as string) & "-" & my pad2(month of d as integer) & "-" & my pad2(day of d) & "T" & my pad2(hours of d) & ":" & my pad2(minutes of d) & ":" & my pad2(seconds of d)
+                            set isRead to read status of msg
+                            set mid to ""
+                            try
+                                set mid to message id of msg
+                            end try
+                            set out to out & my sanitize(subj) & "\t" & my sanitize(sndr) & "\t" & dateStr & "\t" & my sanitize(name of m) & "\t" & my sanitize(acctName) & "\t" & (isRead as string) & "\t" & "" & "\t" & my sanitize(mid) & "\t" & (sortKey as string) & linefeed
+                            set found to found + 1
+                        end if
+                    end repeat
                 end repeat
             end repeat
             return out
@@ -743,39 +741,31 @@ public struct MailService: Sendable {
     /// `fields[7...]` rather than taking a single element).
     static func getMessageScript(id: String, account: String? = nil) -> String {
         let escId = escapeForAppleScript(normalizeMessageID(id))
-        let scope: String
-        if let account, !account.isEmpty {
-            let ea = escapeForAppleScript(account)
-            scope = """
-            set mbList to mailboxes of (first account whose name is "\(ea)")
-            set acctName to "\(ea)"
-            """
+        // Walked account by account so the hit carries its account name
+        // even when unscoped, without the old per-mailbox
+        // `first account whose mailboxes contains m` lookup.
+        let acctScope = if let account, !account.isEmpty {
+            "set acctList to {first account whose name is \"\(escapeForAppleScript(account))\"}"
         } else {
-            // The old version resolved the account per mailbox with
-            // `first account whose mailboxes contains m`, which makes Mail
-            // enumerate every mailbox of every account on each iteration.
-            scope = """
-            set mbList to {}
-            set acctName to ""
-            repeat with a in accounts
-                set mbList to mbList & mailboxes of a
-            end repeat
-            """
+            "set acctList to accounts"
         }
         return """
         tell application "Mail"
             set sep to (ASCII character 30)
-            \(scope)
-            repeat with m in mbList
-                set hits to (messages of m whose message id is "\(escId)")
-                if (count of hits) > 0 then
-                    set msg to item 1 of hits
-                    set body to ""
-                    try
-                        set body to content of msg
-                    end try
-                    return (message id of msg) & sep & my ln(subject of msg) & sep & my ln(sender of msg) & sep & ((date sent of msg) as string) & sep & my ln(name of m) & sep & my ln(acctName) & sep & (read status of msg as string) & sep & body
-                end if
+            \(acctScope)
+            repeat with a in acctList
+                set acctName to name of a
+                repeat with m in mailboxes of a
+                    set hits to (messages of m whose message id is "\(escId)")
+                    if (count of hits) > 0 then
+                        set msg to item 1 of hits
+                        set body to ""
+                        try
+                            set body to content of msg
+                        end try
+                        return (message id of msg) & sep & my ln(subject of msg) & sep & my ln(sender of msg) & sep & ((date sent of msg) as string) & sep & my ln(name of m) & sep & my ln(acctName) & sep & (read status of msg as string) & sep & body
+                    end if
+                end repeat
             end repeat
             return ""
         end tell
