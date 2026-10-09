@@ -3,7 +3,8 @@ import Foundation
 import SQLite3
 import Testing
 
-/// The reader must never write to Mail's store.
+/// The reader must never write to Mail's store, and must ride out the
+/// locks Mail takes on it rather than failing the search.
 @Suite("MailIndexReader store safety")
 struct MailIndexStoreSafetyTests {
     // MARK: - Helpers
@@ -123,4 +124,37 @@ struct MailIndexStoreSafetyTests {
         let out = try await reader.search(query: MailQuery.parse("invoice"), sinceDaysAgo: 365)
         #expect(Set(out.map(\.subject)) == ["First invoice", "Second invoice"])
     }
+
+    // MARK: - Rides out Mail's locks
+
+    /// Mail holds write locks while it commits (and during WAL recovery).
+    /// A handle with no busy timeout fails instantly with `SQLITE_BUSY`,
+    /// turning a lock held for milliseconds into a failed search.
+    @Test("a search waits out a briefly held lock instead of failing with SQLITE_BUSY")
+    func waitsOutBusyLock() async throws {
+        let fixture = try MailIndexFixture(seeds: [.init(subject: "Locked invoice")])
+        defer { fixture.tearDown() }
+        let reader = try MailIndexReader(path: fixture.indexPath, accountsPath: fixture.accountsPath)
+
+        // Rollback-journal fixture: an EXCLUSIVE transaction blocks readers.
+        let locker = try Self.open(fixture.indexPath)
+        try Self.exec(locker, "BEGIN EXCLUSIVE")
+        let lockerBox = UncheckedBox(locker)
+        let release = Task.detached {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            sqlite3_exec(lockerBox.value, "COMMIT", nil, nil, nil)
+            sqlite3_close_v2(lockerBox.value)
+        }
+        defer { release.cancel() }
+
+        let out = try await reader.search(query: MailQuery.parse("invoice"), sinceDaysAgo: 365)
+        #expect(out.map(\.subject) == ["Locked invoice"])
+        await release.value
+    }
+}
+
+/// Carries a raw SQLite handle into a detached task in a test.
+private struct UncheckedBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }

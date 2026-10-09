@@ -1,5 +1,6 @@
 import Foundation
 @testable import MailAutomation
+import SQLite3
 import Testing
 
 /// The guarantees that keep a slow Mail from becoming a *wrong* answer.
@@ -305,6 +306,55 @@ struct MailBoundsTests {
         // without that clause would return confidently wrong results.
         await #expect(throws: MailServiceError.self) {
             _ = try await svc.search(query: "to:alice@example.com", account: "Google")
+        }
+        #expect(runner.calls.isEmpty)
+    }
+
+    /// A reader over a fixture whose schema is then broken underneath it —
+    /// what a macOS update renaming a table looks like from here.
+    private func brokenIndex() throws -> (MailIndexReader, MailIndexFixture) {
+        let fixture = try MailIndexFixture(seeds: [.init(subject: "x marks the spot")])
+        let reader = try MailIndexReader(path: fixture.indexPath, accountsPath: fixture.accountsPath)
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(fixture.indexPath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            throw MailIndexReaderError.sqliteError("fixture open failed")
+        }
+        sqlite3_exec(db, "ALTER TABLE message_global_data RENAME TO message_global_data_v2", nil, nil, nil)
+        sqlite3_close_v2(db)
+        return (reader, fixture)
+    }
+
+    @Test("an index query error falls back to the next backend instead of failing the search")
+    func indexErrorFallsBack() async throws {
+        let (reader, fixture) = try brokenIndex()
+        defer { fixture.tearDown() }
+        let runner = SlowRunner(delay: .zero)
+        let svc = MailService(runner: runner, spotlight: nil, index: reader, timeouts: fastTimeouts)
+
+        _ = try await svc.search(query: "x")
+        #expect(runner.calls.count == 1, "AppleScript should have answered after the index failed")
+    }
+
+    @Test("an index query error falls back for getUnread too")
+    func indexErrorFallsBackForUnread() async throws {
+        let (reader, fixture) = try brokenIndex()
+        defer { fixture.tearDown() }
+        let runner = SlowRunner(delay: .zero)
+        let svc = MailService(runner: runner, spotlight: nil, index: reader, timeouts: fastTimeouts)
+
+        _ = try await svc.getUnread()
+        #expect(runner.calls.count == 1, "AppleScript should have answered after the index failed")
+    }
+
+    @Test("forcing the index backend still surfaces an index query error")
+    func forcedIndexErrorIsSurfaced() async throws {
+        let (reader, fixture) = try brokenIndex()
+        defer { fixture.tearDown() }
+        let runner = SlowRunner(delay: .zero)
+        let svc = MailService(runner: runner, spotlight: nil, index: reader, timeouts: fastTimeouts)
+
+        await #expect(throws: MailIndexReaderError.self) {
+            _ = try await svc.search(query: "x", forceBackend: .index)
         }
         #expect(runner.calls.isEmpty)
     }

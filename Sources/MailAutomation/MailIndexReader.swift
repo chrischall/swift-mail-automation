@@ -135,6 +135,9 @@ public actor MailIndexReader {
 
     // MARK: - Handle management
 
+    /// How long a query waits on a lock Mail holds before failing.
+    static let busyTimeoutMilliseconds: Int32 = 2000
+
     /// Opens a fresh SQLite handle for one query. Callers must close it.
     ///
     /// Read-write + `PRAGMA query_only = 1` rather than
@@ -158,6 +161,10 @@ public actor MailIndexReader {
                     "Full Disk Access."
             )
         }
+        // Mail holds write locks while it commits, and during WAL recovery.
+        // Without a busy timeout a lock held for milliseconds fails the
+        // query outright with SQLITE_BUSY.
+        sqlite3_busy_timeout(handle, busyTimeoutMilliseconds)
         guard cmail_sqlite_disable_checkpoint_on_close(handle) == SQLITE_OK else {
             sqlite3_close_v2(handle)
             throw MailIndexReaderError.databaseNotAccessible(

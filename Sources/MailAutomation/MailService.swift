@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 
 /// Errors surfaced by `MailService` operations.
 public enum MailServiceError: Error, Equatable, Sendable {
@@ -66,6 +67,7 @@ public struct MailService: Sendable {
     private let spotlight: SpotlightMailSearch?
     private let index: MailIndexReader?
     private let timeouts: MailTimeouts
+    private static let log = Logger(label: "com.chall.apple-mail-kit.service")
 
     /// Create a `MailService`.
     ///
@@ -220,10 +222,16 @@ public struct MailService: Sendable {
         let skip = max(0, offset)
 
         if let index {
-            return try await withTimeout(
-                seconds: timeouts.operationSeconds, operation: "mail unread (index)"
-            ) {
-                try await index.unread(account: account, limit: maxN, offset: skip)
+            do {
+                return try await withTimeout(
+                    seconds: timeouts.operationSeconds, operation: "mail unread (index)"
+                ) {
+                    try await index.unread(account: account, limit: maxN, offset: skip)
+                }
+            } catch let error as MailIndexReaderError {
+                // A query error (schema change, a lock outlasting the busy
+                // timeout) is what the AppleScript path below exists for.
+                Self.log.warning("mail index failed, falling back to Mail.app: \(error)")
             }
         }
 
@@ -354,13 +362,22 @@ public struct MailService: Sendable {
         // ── 1. Index ──────────────────────────────────────────────────────
         if forceBackend == nil || forceBackend == .index {
             if let index {
-                return try await withTimeout(
-                    seconds: timeouts.operationSeconds, operation: "mail search (index)"
-                ) {
-                    try await index.search(
-                        query: parsed, account: account, mailbox: mailbox,
-                        sinceDaysAgo: sinceDaysAgo, limit: maxN, offset: skip
-                    )
+                do {
+                    return try await withTimeout(
+                        seconds: timeouts.operationSeconds, operation: "mail search (index)"
+                    ) {
+                        try await index.search(
+                            query: parsed, account: account, mailbox: mailbox,
+                            sinceDaysAgo: sinceDaysAgo, limit: maxN, offset: skip
+                        )
+                    }
+                } catch let error as MailIndexReaderError where forceBackend == nil {
+                    // A query error — a schema change, or a lock that
+                    // outlasted the busy timeout — must not fail a search
+                    // the other backends can still answer. A forced index
+                    // surfaces it. A timeout is not caught: that is a slow
+                    // answer, not an unavailable backend.
+                    Self.log.warning("mail index failed, falling back: \(error)")
                 }
             }
             if forceBackend == .index {
