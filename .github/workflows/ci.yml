@@ -18,6 +18,11 @@ jobs:
     # The fleet's shared self-hosted Mac, like every other Apple repo: hosted
     # macOS slots are few, and CodeQL Swift saturating them has starved the
     # required `ci-gated` check before.
+    # This repo is PUBLIC and this job runs on the shared self-hosted Mac:
+    # never run a fork's code there. Fork PRs skip the job (ci-gated stays
+    # unreported, so they still can't merge), and the repo also requires
+    # approval for every external contributor's workflow run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS]
     timeout-minutes: 10
     steps:
