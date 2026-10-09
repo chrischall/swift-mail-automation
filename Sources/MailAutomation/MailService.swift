@@ -212,6 +212,9 @@ public struct MailService: Sendable {
     /// - Returns: Unread messages, each with `isRead == false`. Ordered
     ///   newest-first on the index backend; on the AppleScript fallback the
     ///   order is Mail's own mailbox-iteration order, which is arbitrary.
+    /// - Throws: ``MailIndexReaderError`` when the index fails a page after
+    ///   the first — only the first page falls back to Mail.app, so pages
+    ///   of one listing never mix backends.
     public func getUnread(
         limit: Int = 10,
         account: String? = nil,
@@ -228,9 +231,12 @@ public struct MailService: Sendable {
                 ) {
                     try await index.unread(account: account, limit: maxN, offset: skip)
                 }
-            } catch let error as MailIndexReaderError {
+            } catch let error as MailIndexReaderError where skip == 0 {
                 // A query error (schema change, a lock outlasting the busy
-                // timeout) is what the AppleScript path below exists for.
+                // timeout) is what the AppleScript path below exists for —
+                // on the first page only. A later page surfaces it: page 1
+                // came from the index, and AppleScript's mailbox-order skip
+                // would skip and duplicate mail across pages.
                 Self.log.warning("mail index failed, falling back to Mail.app: \(error)")
             }
         }
@@ -313,7 +319,9 @@ public struct MailService: Sendable {
     /// unavailable *and* the query isn't scoped to an account or mailbox
     /// (Spotlight can't express those); AppleScript is the last resort and
     /// is bounded on both sides. Every page of a query is answered by the
-    /// same backend, so paging with `offset` never mixes result sets.
+    /// same backend, so paging with `offset` never mixes result sets: an
+    /// index query error falls back to the next backend only on the first
+    /// page (`offset == 0`); on a later page it is thrown.
     ///
     /// - Parameters:
     ///   - query: The search string. Supports multiple terms, `AND`/`OR`,
@@ -338,6 +346,8 @@ public struct MailService: Sendable {
     ///   query with more matches than `limit` returns the newest of
     ///   whichever mailboxes Mail walked first, not the newest overall.
     /// - Throws: ``MailQueryError/empty`` for a query with no terms;
+    ///   ``MailIndexReaderError`` when the index fails a page after the
+    ///   first, or when the index backend is forced;
     ///   ``MailServiceError/timedOut(operation:seconds:)`` when a backend
     ///   exceeded its bound — never an empty array;
     ///   ``MailServiceError/tooBroad(_:)`` when the only available backend
@@ -371,12 +381,16 @@ public struct MailService: Sendable {
                             sinceDaysAgo: sinceDaysAgo, limit: maxN, offset: skip
                         )
                     }
-                } catch let error as MailIndexReaderError where forceBackend == nil {
+                } catch let error as MailIndexReaderError where forceBackend == nil && skip == 0 {
                     // A query error — a schema change, or a lock that
                     // outlasted the busy timeout — must not fail a search
                     // the other backends can still answer. A forced index
-                    // surfaces it. A timeout is not caught: that is a slow
-                    // answer, not an unavailable backend.
+                    // surfaces it, and so does a later page: page 1 came
+                    // from the index, and answering page 2 from another
+                    // backend (different match rule, different ordering)
+                    // would skip and duplicate mail. A timeout is not
+                    // caught: that is a slow answer, not an unavailable
+                    // backend.
                     Self.log.warning("mail index failed, falling back: \(error)")
                 }
             }
