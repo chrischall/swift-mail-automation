@@ -93,9 +93,7 @@ public enum ISODate {
 
         // The whole string must have been consumed — this is what stops a
         // datetime from being read as just its date half.
-        guard sc.atEnd else { return nil }
-
-        guard (1 ... 12).contains(month), day >= 1, day <= Self.daysInMonth(month, year),
+        guard sc.atEnd, (1 ... 12).contains(month), day >= 1, day <= Self.daysInMonth(month, year),
               hour <= 23, minute <= 59, second <= 60
         else { return nil }
 
