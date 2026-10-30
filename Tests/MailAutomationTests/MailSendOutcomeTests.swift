@@ -1,5 +1,6 @@
 import Foundation
 @testable import MailAutomation
+import Synchronization
 import Testing
 
 /// A send that times out must not be sent later.
@@ -18,20 +19,19 @@ struct MailSendOutcomeTests {
     /// Models `NSAppleScriptRunner`: waits `queueDelay` for the main actor,
     /// drops the call if its task was cancelled meanwhile, runs the
     /// pre-execution hook, then "executes" for `execDelay`.
-    final class QueueingRunner: AppleScriptRunner, @unchecked Sendable {
+    final class QueueingRunner: AppleScriptRunner, Sendable {
         let queueDelay: Duration
         let execDelay: Duration
-        private let lock = NSLock()
-        private var _executed = 0
-        private var _bodyFileExistedAtEnd: Bool?
+        private let _executed = Mutex(0)
+        private let _bodyFileExistedAtEnd = Mutex<Bool?>(nil)
 
         init(queueDelay: Duration, execDelay: Duration) {
             self.queueDelay = queueDelay
             self.execDelay = execDelay
         }
 
-        var executed: Int { lock.withLock { _executed } }
-        var bodyFileExistedAtEnd: Bool? { lock.withLock { _bodyFileExistedAtEnd } }
+        var executed: Int { _executed.withLock { $0 } }
+        var bodyFileExistedAtEnd: Bool? { _bodyFileExistedAtEnd.withLock { $0 } }
 
         func run(source: String) async throws -> String {
             try await run(source: source, beforeExecute: {})
@@ -49,7 +49,7 @@ struct MailSendOutcomeTests {
             }
             try Task.checkCancellation()
             try beforeExecute()
-            lock.withLock { _executed += 1 }
+            _executed.withLock { $0 += 1 }
             // Execution is synchronous in the real runner: not cancellable.
             let execUntil = clock.now.advanced(by: execDelay)
             while clock.now < execUntil {
@@ -58,7 +58,7 @@ struct MailSendOutcomeTests {
             let exists = Self.bodyPath(in: source).map {
                 FileManager.default.fileExists(atPath: $0)
             } ?? false
-            lock.withLock { _bodyFileExistedAtEnd = exists }
+            _bodyFileExistedAtEnd.withLock { $0 = exists }
             return "SENT"
         }
 

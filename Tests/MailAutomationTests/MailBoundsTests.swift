@@ -1,6 +1,7 @@
 import Foundation
 @testable import MailAutomation
 import SQLite3
+import Synchronization
 import Testing
 
 /// The guarantees that keep a slow Mail from becoming a *wrong* answer.
@@ -12,10 +13,11 @@ import Testing
 struct MailBoundsTests {
     /// A runner that blocks for `delay` before answering, so the operation
     /// bound can be exercised without waiting on real Mail.
-    final class SlowRunner: AppleScriptRunner, @unchecked Sendable {
+    final class SlowRunner: AppleScriptRunner, Sendable {
         let delay: Duration
         let reply: String
-        private(set) var calls: [String] = []
+        private let _calls = Mutex<[String]>([])
+        var calls: [String] { _calls.withLock { $0 } }
 
         init(delay: Duration, reply: String = "") {
             self.delay = delay
@@ -23,12 +25,12 @@ struct MailBoundsTests {
         }
 
         func run(source: String) async throws -> String {
-            calls.append(source)
+            _calls.withLock { $0.append(source) }
             try await Task.sleep(for: delay)
             return reply
         }
 
-        func reset() { calls.removeAll() }
+        func reset() { _calls.withLock { $0.removeAll() } }
     }
 
     private var fastTimeouts: MailTimeouts {
