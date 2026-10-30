@@ -1,4 +1,4 @@
-import Foundation
+public import Foundation
 
 /// Shared ISO 8601 handling.
 ///

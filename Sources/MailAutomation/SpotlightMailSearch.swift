@@ -1,5 +1,5 @@
+public import Logging
 import Foundation
-import Logging
 
 /// Spotlight-backed mail search. Apple indexes every `.emlx` file in
 /// `~/Library/Mail/` with subject, sender, date, and body — `mdfind` hits
