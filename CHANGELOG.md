@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/chrischall/swift-mail-automation/compare/v1.2.2...v2.0.0) (2026-10-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* the package now requires macOS 26 (`.macOS(.v26)`) and swift-tools-version 6.4. Consumers on macOS 14–25 must stay on 1.x. `MailService.withIndexIfAvailable` now types `indexError` as `MailIndexReaderError?` instead of `Error?`. This only affects code that spells out the tuple type; apple-swift-mcp destructures it.
+
+### Features
+
+* require macOS 26 and adopt typed throws ([#72](https://github.com/chrischall/swift-mail-automation/issues/72)) ([edda98a](https://github.com/chrischall/swift-mail-automation/commit/edda98a9da524978bcbd904c3af90c3f48123d16))
+
 ## [1.2.2](https://github.com/chrischall/swift-mail-automation/compare/v1.2.1...v1.2.2) (2026-10-09)
 
 
