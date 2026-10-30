@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-Swift Package Manager project (tools 6.4), macOS 26+, Swift 6 language mode with strict concurrency.
+Swift Package Manager project (tools 6.4), macOS 27.2+, Swift 6 language mode with strict concurrency.
 
 ```bash
 swift build               # build the library
