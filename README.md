@@ -11,7 +11,7 @@ correctly ordered on large accounts; AppleScript (via `NSAppleScript`)
 handles sending and discovery, with Spotlight (`mdfind`) covering body
 search.
 
-Platform: **macOS 26+**. Pure Swift 6 with strict concurrency. Single
+Platform: **macOS 27.2+**. Pure Swift 6 with strict concurrency. Single
 dependency: `swift-log`.
 
 ## Install
