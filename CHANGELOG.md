@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/chrischall/swift-mail-automation/compare/v2.0.0...v2.1.0) (2026-10-30)
+
+
+### Features
+
+* require macOS 27.2 ([#74](https://github.com/chrischall/swift-mail-automation/issues/74)) ([7fb9146](https://github.com/chrischall/swift-mail-automation/commit/7fb9146adb7ba8370405b64177a7d0e3dca48969))
+
 ## [2.0.0](https://github.com/chrischall/swift-mail-automation/compare/v1.2.2...v2.0.0) (2026-10-30)
 
 
