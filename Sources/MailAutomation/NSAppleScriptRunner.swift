@@ -40,10 +40,13 @@ public struct NSAppleScriptRunner: AppleScriptRunner {
     /// passes, so the main-thread invariant is established in one place
     /// and can be asserted by tests without needing Mail.app or an
     /// Automation permission grant.
-    static func onMainThread<T: Sendable>(
-        _ body: @MainActor @Sendable () throws -> T
-    ) async rethrows -> T {
-        try await MainActor.run(body: body)
+    ///
+    /// Typed: `MainActor.run` only `rethrows`, which would erase the error
+    /// type, so the body's outcome crosses the hop as a `Result`.
+    static func onMainThread<T: Sendable, E: Error>(
+        _ body: @MainActor @Sendable () throws(E) -> T
+    ) async throws(E) -> T {
+        try await MainActor.run { Result { () throws(E) -> T in try body() } }.get()
     }
 
     /// Compile and execute `source` on the main thread. Returns the
@@ -51,10 +54,9 @@ public struct NSAppleScriptRunner: AppleScriptRunner {
     /// the script can't be constructed, `.runtime` if AppleScript
     /// signals an error during execution (typically: application not
     /// running, user denied the automation permission prompt, or the
-    /// script referenced something that doesn't exist), and
-    /// `CancellationError` if the calling task was cancelled before the
-    /// script started.
-    public func run(source: String) async throws -> String {
+    /// script referenced something that doesn't exist), and `.cancelled`
+    /// if the calling task was cancelled before the script started.
+    public func run(source: String) async throws(AppleScriptError) -> String {
         try await run(source: source, beforeExecute: {})
     }
 
@@ -74,15 +76,15 @@ public struct NSAppleScriptRunner: AppleScriptRunner {
     /// `executeAndReturnError` is synchronous.
     public func run(
         source: String,
-        beforeExecute: @escaping @Sendable () throws -> Void
-    ) async throws -> String {
-        try Task.checkCancellation()
+        beforeExecute: @escaping @Sendable () throws(AppleScriptError) -> Void
+    ) async throws(AppleScriptError) -> String {
+        guard !Task.isCancelled else { throw .cancelled }
         // NSAppleScript isn't Sendable; construct + execute it entirely
         // inside the hop so its lifecycle stays on one thread.
-        return try await Self.onMainThread { () throws -> String in
+        return try await Self.onMainThread { () throws(AppleScriptError) -> String in
             // `MainActor.run` executes in the caller's task, so this sees
             // a cancellation that arrived while the hop was queued.
-            try Task.checkCancellation()
+            guard !Task.isCancelled else { throw .cancelled }
             try beforeExecute()
             guard let script = NSAppleScript(source: source) else {
                 throw AppleScriptError.compile("Failed to construct NSAppleScript")

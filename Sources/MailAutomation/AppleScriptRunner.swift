@@ -18,17 +18,19 @@ public protocol AppleScriptRunner: Sendable {
     /// - Parameter source: AppleScript source to compile and run.
     /// - Returns: The script's result, coerced to a string. Scripts that
     ///   don't yield a string (or yield no value) return `""`.
-    /// - Throws: `AppleScriptError.compile` if the source can't be parsed;
-    ///   `AppleScriptError.runtime` if execution fails (app not running,
-    ///   Automation permission denied, script-level error, …).
-    func run(source: String) async throws -> String
+    /// - Throws: ``AppleScriptError/compile(_:)`` if the source can't be
+    ///   parsed; ``AppleScriptError/runtime(_:)`` if execution fails (app
+    ///   not running, Automation permission denied, script-level error, …);
+    ///   ``AppleScriptError/cancelled`` if the calling task was cancelled
+    ///   before the script started.
+    func run(source: String) async throws(AppleScriptError) -> String
 
     /// Execute `source`, first calling `beforeExecute` at the last moment
     /// the script can still be abandoned.
     ///
     /// The hook is the runner's promise about *when* execution begins: if
     /// it returns, the script runs; if it throws, the script does not run
-    /// and the error propagates. ``MailService/send(to:subject:body:cc:bcc:)``
+    /// and its error propagates unchanged. ``MailService/send(to:subject:body:cc:bcc:)``
     /// uses it to tell a send that never started (safe to report as timed
     /// out) from one that did (must be awaited — Mail may deliver it).
     ///
@@ -37,15 +39,15 @@ public protocol AppleScriptRunner: Sendable {
     /// executing as soon as it is called.
     func run(
         source: String,
-        beforeExecute: @escaping @Sendable () throws -> Void
-    ) async throws -> String
+        beforeExecute: @escaping @Sendable () throws(AppleScriptError) -> Void
+    ) async throws(AppleScriptError) -> String
 }
 
 public extension AppleScriptRunner {
     func run(
         source: String,
-        beforeExecute: @escaping @Sendable () throws -> Void
-    ) async throws -> String {
+        beforeExecute: @escaping @Sendable () throws(AppleScriptError) -> Void
+    ) async throws(AppleScriptError) -> String {
         try beforeExecute()
         return try await run(source: source)
     }
@@ -59,4 +61,8 @@ public enum AppleScriptError: Error, Equatable, Sendable {
     case runtime(String)
     /// The script couldn't be constructed (syntax error, etc).
     case compile(String)
+    /// The calling task was cancelled before the script started, so it was
+    /// dropped without running. A runner reports cancellation as this case
+    /// rather than `CancellationError`, so the protocol can throw one type.
+    case cancelled
 }

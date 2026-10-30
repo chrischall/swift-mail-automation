@@ -327,6 +327,24 @@ struct SpotlightMailSearchTests {
         #expect(!Self.processRunning(matching: "sleep \(marker)"), "the child is still running")
     }
 
+    @Test("both pipes are drained past the 64 KB pipe buffer, so a chatty child can't wedge the runner")
+    func drainsBothPipesPastBuffer() async throws {
+        // Each stream is several pipe buffers long. Undrained, either one
+        // blocks the child in write() and it never exits; the runner then
+        // hangs with no error. Bounded so a regression fails, not hangs.
+        let size = 300_000
+        let runner = SpotlightMailSearch.makeProcessRunner(executableURL: URL(filePath: "/bin/sh"))
+        let script = """
+        head -c \(size) /dev/zero | tr '\\0' e >&2
+        head -c \(size) /dev/zero | tr '\\0' o
+        """
+        let out = try await withTimeout(seconds: 10, operation: "drain") { () async throws(MailServiceError) -> String in
+            do { return try await runner(["-c", script]) } catch { throw MailServiceError(wrapping: error) }
+        }
+        #expect(out.utf8.count == size)
+        #expect(out.allSatisfy { $0 == "o" })
+    }
+
     /// Whether a process whose command line matches `pattern` is alive.
     private static func processRunning(matching pattern: String) -> Bool {
         let p = Process()

@@ -84,17 +84,21 @@ public struct MailTimeouts: Sendable, Equatable {
 /// Holds whichever arrives first — a result before the caller attached its
 /// continuation, or a continuation waiting for a result — and lets exactly
 /// one resume through.
-final class MailTimeoutBox<T: Sendable>: Sendable {
+///
+/// Typed on `Failure`: the outcome travels as a `Result` through a
+/// non-throwing continuation, because a checked continuation can only throw
+/// `any Error`.
+final class MailTimeoutBox<T: Sendable, Failure: Error>: Sendable {
     private struct State {
-        var continuation: CheckedContinuation<T, any Error>?
-        var pending: Result<T, any Error>?
+        var continuation: CheckedContinuation<Result<T, Failure>, Never>?
+        var pending: Result<T, Failure>?
         var finished = false
     }
 
     private let state = Mutex(State())
 
-    func attach(_ c: CheckedContinuation<T, any Error>) {
-        let pending: Result<T, any Error>? = state.withLock { state in
+    func attach(_ c: CheckedContinuation<Result<T, Failure>, Never>) {
+        let pending: Result<T, Failure>? = state.withLock { state in
             guard let pending = state.pending else {
                 state.continuation = c
                 return nil
@@ -103,12 +107,12 @@ final class MailTimeoutBox<T: Sendable>: Sendable {
             return pending
         }
         if let pending {
-            c.resume(with: pending)
+            c.resume(returning: pending)
         }
     }
 
-    func resume(_ result: Result<T, any Error>) {
-        let waiter: CheckedContinuation<T, any Error>? = state.withLock { state in
+    func resume(_ result: Result<T, Failure>) {
+        let waiter: CheckedContinuation<Result<T, Failure>, Never>? = state.withLock { state in
             guard !state.finished else { return nil }
             guard let c = state.continuation else {
                 // The timer can fire as the work returns, so a later producer
@@ -122,13 +126,19 @@ final class MailTimeoutBox<T: Sendable>: Sendable {
             state.continuation = nil
             return c
         }
-        waiter?.resume(with: result)
+        waiter?.resume(returning: result)
+    }
+
+    /// Suspends until the first result arrives. Not cancellation-aware: a
+    /// caller that must react to cancellation resumes the box itself.
+    func outcome() async -> Result<T, Failure> {
+        await withCheckedContinuation { attach($0) }
     }
 }
 
 /// Runs `body`, throwing ``MailServiceError/timedOut(operation:seconds:)``
-/// if it hasn't finished within
-/// `seconds`.
+/// if it hasn't finished within `seconds`, and
+/// ``MailServiceError/cancelled`` if the caller is cancelled first.
 ///
 /// Deliberately **not** built on `withThrowingTaskGroup`: a group awaits
 /// every child before it unwinds, so a body that can't observe cancellation
@@ -153,12 +163,12 @@ final class MailTimeoutBox<T: Sendable>: Sendable {
 func withTimeout<T: Sendable>(
     seconds: Double,
     operation: String,
-    _ body: @escaping @Sendable @concurrent () async throws -> T
-) async throws -> T {
-    let box = MailTimeoutBox<T>()
+    _ body: @escaping @Sendable @concurrent () async throws(MailServiceError) -> T
+) async throws(MailServiceError) -> T {
+    let box = MailTimeoutBox<T, MailServiceError>()
 
     let work = Task { @concurrent in
-        do { try await box.resume(.success(body())) }
+        do throws(MailServiceError) { try await box.resume(.success(body())) }
         catch { box.resume(.failure(error)) }
     }
 
@@ -166,17 +176,17 @@ func withTimeout<T: Sendable>(
         // Cancelled (below) once the caller has its answer; a cancelled
         // sleep throws, so a timer that lost the race never reports.
         try await Task.sleep(for: .seconds(seconds))
-        box.resume(.failure(MailServiceError.timedOut(operation: operation, seconds: seconds)))
+        box.resume(.failure(.timedOut(operation: operation, seconds: seconds)))
         work.cancel()
     }
     defer { timer.cancel() }
 
     return try await withTaskCancellationHandler {
-        try await withCheckedThrowingContinuation { box.attach($0) }
+        await box.outcome()
     } onCancel: {
         work.cancel()
-        box.resume(.failure(CancellationError()))
-    }
+        box.resume(.failure(.cancelled))
+    }.get()
 }
 
 /// Records whether a script has started executing, so a caller whose bound
@@ -193,13 +203,14 @@ final class ScriptStartGate: Sendable {
     private let state = Mutex(State.waiting)
     /// Resolves when the script starts, or when the work ends without ever
     /// starting (a failure before execution), so a waiter never hangs.
-    private let settled = MailTimeoutBox<Void>()
+    private let settled = MailTimeoutBox<Void, Never>()
 
-    /// The runner's pre-execution hook. Throws `CancellationError` if the
-    /// caller abandoned the script first.
-    func begin() throws {
-        try state.withLock { state throws(CancellationError) in
-            guard state == .waiting else { throw CancellationError() }
+    /// The runner's pre-execution hook. Throws
+    /// ``AppleScriptError/cancelled`` if the caller abandoned the script
+    /// first.
+    func begin() throws(AppleScriptError) {
+        try state.withLock { state throws(AppleScriptError) in
+            guard state == .waiting else { throw .cancelled }
             state = .started
         }
         settled.resume(.success(()))
@@ -222,7 +233,7 @@ final class ScriptStartGate: Sendable {
     }
 
     /// Suspends until the script starts or the work ends.
-    func waitUntilSettled() async throws {
-        try await withCheckedThrowingContinuation { settled.attach($0) }
+    func waitUntilSettled() async {
+        _ = await settled.outcome()
     }
 }

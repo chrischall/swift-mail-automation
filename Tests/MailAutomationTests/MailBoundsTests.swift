@@ -24,9 +24,13 @@ struct MailBoundsTests {
             self.reply = reply
         }
 
-        func run(source: String) async throws -> String {
+        func run(source: String) async throws(AppleScriptError) -> String {
             _calls.withLock { $0.append(source) }
-            try await Task.sleep(for: delay)
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                throw .cancelled
+            }
             return reply
         }
 
@@ -47,9 +51,9 @@ struct MailBoundsTests {
         do {
             let results = try await svc.search(query: "invoice", account: "Google")
             Issue.record("expected a timeout, got \(results.count) results")
-        } catch let e as MailServiceError {
-            guard case let .timedOut(operation, seconds) = e else {
-                Issue.record("expected .timedOut, got \(e)")
+        } catch {
+            guard case let .timedOut(operation, seconds) = error else {
+                Issue.record("expected .timedOut, got \(error)")
                 return
             }
             // The error has to name what timed out and what bound was hit —
@@ -77,10 +81,10 @@ struct MailBoundsTests {
         do {
             _ = try await svc.getMessage(id: "<a@b>", account: "Google")
             Issue.record("expected a timeout")
-        } catch let e as MailServiceError {
+        } catch {
             // "no message found" would be a lie: we never finished looking.
-            guard case .timedOut = e else {
-                Issue.record("expected .timedOut, got \(e)")
+            guard case .timedOut = error else {
+                Issue.record("expected .timedOut, got \(error)")
                 return
             }
         }
@@ -96,8 +100,8 @@ struct MailBoundsTests {
             { try await svc.search(query: "x") },
             { try await svc.getUnread() },
         ] {
-            do { _ = try await probe() } catch let e as MailServiceError {
-                if case let .timedOut(op, _) = e {
+            do { _ = try await probe() } catch {
+                if case let .timedOut(op, _) = error as? MailServiceError {
                     seen.append(op)
                 }
             }
@@ -114,7 +118,7 @@ struct MailBoundsTests {
         let svc = MailService(runner: runner, spotlight: nil, timeouts: fastTimeouts)
 
         for q in ["", "   ", "OR", "AND OR"] {
-            await #expect(throws: MailQueryError.self) {
+            await #expect(throws: MailServiceError.query(.empty)) {
                 _ = try await svc.search(query: q)
             }
         }
@@ -313,9 +317,9 @@ struct MailBoundsTests {
         do {
             _ = try await svc.search(query: "x", forceBackend: .index)
             Issue.record("expected a tooBroad error")
-        } catch let e as MailServiceError {
-            guard case let .tooBroad(msg) = e else {
-                Issue.record("expected .tooBroad, got \(e)")
+        } catch {
+            guard case let .tooBroad(msg) = error else {
+                Issue.record("expected .tooBroad, got \(error)")
                 return
             }
             #expect(msg.contains("Full Disk Access"))
@@ -382,9 +386,10 @@ struct MailBoundsTests {
         // Page 1 of this query would have come from the index. Answering
         // page 2 from AppleScript — a different match rule and ordering —
         // would skip and duplicate mail across pages.
-        await #expect(throws: MailIndexReaderError.self) {
+        let error = await #expect(throws: MailServiceError.self) {
             _ = try await svc.search(query: "x", offset: 20)
         }
+        #expect(error?.isIndexError == true, "expected .index, got \(String(describing: error))")
         #expect(runner.calls.isEmpty)
     }
 
@@ -395,9 +400,10 @@ struct MailBoundsTests {
         let runner = SlowRunner(delay: .zero)
         let svc = MailService(runner: runner, spotlight: nil, index: reader, timeouts: fastTimeouts)
 
-        await #expect(throws: MailIndexReaderError.self) {
+        let error = await #expect(throws: MailServiceError.self) {
             _ = try await svc.getUnread(offset: 10)
         }
+        #expect(error?.isIndexError == true, "expected .index, got \(String(describing: error))")
         #expect(runner.calls.isEmpty)
     }
 
@@ -408,9 +414,10 @@ struct MailBoundsTests {
         let runner = SlowRunner(delay: .zero)
         let svc = MailService(runner: runner, spotlight: nil, index: reader, timeouts: fastTimeouts)
 
-        await #expect(throws: MailIndexReaderError.self) {
+        let error = await #expect(throws: MailServiceError.self) {
             _ = try await svc.search(query: "x", forceBackend: .index)
         }
+        #expect(error?.isIndexError == true, "expected .index, got \(String(describing: error))")
         #expect(runner.calls.isEmpty)
     }
 
@@ -448,5 +455,14 @@ struct MailBoundsTests {
 
         #expect(runner.calls[0].contains("(45 * days)"))
         #expect(runner.calls[0].contains("date sent > cutoff"))
+    }
+}
+
+private extension MailServiceError {
+    var isIndexError: Bool {
+        if case .index = self {
+            return true
+        }
+        return false
     }
 }

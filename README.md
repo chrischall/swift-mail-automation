@@ -80,7 +80,9 @@ try await mail.send(
 ### `MailService`
 
 The main entry point. Construct once, reuse across calls. All methods
-are async and throw `AppleScriptError` or `MailServiceError`.
+are async and use typed throws: they throw `MailServiceError` and nothing
+else, so a `catch` needs no cast and a `switch` over the error is checked
+for exhaustiveness.
 
 | Method | Purpose |
 |---|---|
@@ -156,6 +158,72 @@ a failure. That is now a
 `MailServiceError.timedOut(operation:seconds:)`; a timeout is never
 rendered as "no results".
 
+### Errors: `MailServiceError`
+
+Every `MailService` method is `throws(MailServiceError)`. Errors from the
+layers underneath keep their own case and payload:
+
+| Case | Meaning |
+|---|---|
+| `.timedOut(operation:seconds:)` | A bound expired. Never an empty result. On `send`, only when the script never started — nothing was sent, a retry is safe. |
+| `.tooBroad(String)` | The available backend can't answer this query safely; the message says how to narrow it. |
+| `.invalidInput(String)` | A required argument was empty. |
+| `.scriptFailure(String)` | Mail answered, but not with success (e.g. no message with that id). |
+| `.appleScript(AppleScriptError)` | The runner failed: `.runtime` (Mail not running, Automation denied, script error) or `.compile`. |
+| `.query(MailQueryError)` | The search string didn't parse (`.empty`, `.danglingField`, …). |
+| `.index(MailIndexReaderError)` | The Envelope Index failed where the service couldn't fall back (a later page, or `forceBackend: .index`). |
+| `.cancelled` | The calling task was cancelled; an unstarted script was dropped. |
+| `.systemFailure(String)` | A failure outside Mail: writing the send body's temp file, launching `mdfind`, or an injected Spotlight runner's own error. |
+
+```swift
+do {
+    let hits = try await mail.search(query: "invoice")
+} catch .timedOut(let operation, let seconds) {
+    // Not "no results" — the query never finished.
+} catch .query(.empty) {
+    // Refused: an empty query would scan every message.
+} catch .appleScript(.runtime(let message)) {
+    // Mail not running, Automation denied, …
+} catch {
+    // `error` is `MailServiceError` here.
+}
+```
+
+#### Migrating from 2.x
+
+3.0 replaced the untyped `throws` on `MailService` and `AppleScriptRunner`
+with typed throws. `MailServiceError` keeps its name and its four existing
+cases; what used to escape as a different type is now a case of it:
+
+| 2.x | 3.x |
+|---|---|
+| `catch let e as MailServiceError { … }` | `catch { … }` — `error` is already `MailServiceError` |
+| `catch let e as AppleScriptError` | `catch .appleScript(let e)` |
+| `catch let e as MailQueryError` | `catch .query(let e)` |
+| `catch let e as MailIndexReaderError` | `catch .index(let e)` |
+| `catch is CancellationError` | `catch .cancelled` |
+| a final `catch { … }` for anything else (temp-file, `mdfind` launch) | `catch .systemFailure(let message)` |
+
+An exhaustive `switch` over `MailServiceError` must handle the five new
+cases. `MailServiceError(wrapping:)` converts any error into the case that
+keeps the most information, for code that still mixes in untyped calls.
+
+Custom `AppleScriptRunner`s must declare `throws(AppleScriptError)` on
+`run(source:)` (and on `run(source:beforeExecute:)` if they implement it —
+its hook is now `() throws(AppleScriptError) -> Void`). Report
+cancellation as the new `AppleScriptError.cancelled` instead of rethrowing
+`CancellationError`:
+
+```swift
+func run(source: String) async throws(AppleScriptError) -> String {
+    do { try await Task.sleep(for: .seconds(1)) } catch { throw .cancelled }
+    return ""
+}
+```
+
+A throwing closure passed as `beforeExecute` needs its error type spelled
+out: `{ () throws(AppleScriptError) in … }`.
+
 ### `EmailMessage`
 
 Value type returned from search / unread:
@@ -225,9 +293,9 @@ tests:
 ```swift
 import MailAutomation
 
-final class MyFakeRunner: AppleScriptRunner {
+struct MyFakeRunner: AppleScriptRunner {
     var response = ""
-    func run(source: String) async throws -> String { response }
+    func run(source: String) async throws(AppleScriptError) -> String { response }
 }
 
 let mail = MailService(runner: MyFakeRunner())
