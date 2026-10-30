@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/chrischall/swift-mail-automation/compare/v2.1.1...v3.0.0) (2026-10-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* every public MailService method now throws(MailServiceError), which gains appleScript, query, index, cancelled and systemFailure cases; AppleScriptRunner.run throws(AppleScriptError). See README, Migrating from 2.x.
+
+### Features
+
+* adopt typed throws on the public MailService API ([05da696](https://github.com/chrischall/swift-mail-automation/commit/05da69627964debd1080412690c47f95151acd36))
+
 ## [2.1.1](https://github.com/chrischall/swift-mail-automation/compare/v2.1.0...v2.1.1) (2026-10-30)
 
 
