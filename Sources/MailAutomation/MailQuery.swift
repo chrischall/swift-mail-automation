@@ -77,7 +77,7 @@ public struct MailQuery: Equatable, Sendable {
     ///   (this is deliberate — an empty query must never be silently
     ///   promoted to "match everything"), or
     ///   ``MailQueryError/danglingField(_:)`` for a prefix with no value.
-    public static func parse(_ raw: String) throws -> MailQuery {
+    public static func parse(_ raw: String) throws(MailQueryError) -> MailQuery {
         let tokens = try tokenize(raw)
         var groups: [[Term]] = []
         var current: [Term] = []
@@ -114,7 +114,7 @@ public struct MailQuery: Equatable, Sendable {
 
     /// Split the raw query into tokens, honouring quoted phrases and
     /// field prefixes.
-    private static func tokenize(_ raw: String) throws -> [Token] {
+    private static func tokenize(_ raw: String) throws(MailQueryError) -> [Token] {
         var tokens: [Token] = []
         let chars = Array(raw)
         var i = 0
@@ -228,7 +228,7 @@ public struct MailQuery: Equatable, Sendable {
     ///
     /// - Returns: A predicate safe to drop into a `WHERE` clause, and the
     ///   bind arguments in positional order.
-    func sqlPredicate() throws -> (sql: String, args: [String]) {
+    func sqlPredicate() -> (sql: String, args: [String]) {
         var args: [String] = []
         var orClauses: [String] = []
 
@@ -272,7 +272,7 @@ public struct MailQuery: Equatable, Sendable {
     ///   (it fails with *Can't make "…" into type to recipient*), so the
     ///   caller is told rather than silently handed a query that drops the
     ///   constraint.
-    func appleScriptPredicate() throws -> String {
+    func appleScriptPredicate() throws(MailQueryError) -> String {
         var orClauses: [String] = []
 
         for group in groups {

@@ -106,7 +106,7 @@ public struct MailService: Sendable {
         runner: any AppleScriptRunner,
         spotlight: SpotlightMailSearch? = SpotlightMailSearch(),
         timeouts: MailTimeouts = .default
-    ) -> (service: MailService, indexError: Error?) {
+    ) -> (service: MailService, indexError: MailIndexReaderError?) {
         do {
             let reader = try MailIndexReader()
             return (
@@ -479,15 +479,15 @@ public struct MailService: Sendable {
         let predicate: String
         do {
             predicate = try parsed.appleScriptPredicate()
-        } catch let e as MailQueryError {
-            if case .unsupportedField = e {
+        } catch {
+            if case .unsupportedField = error {
                 throw MailServiceError.tooBroad(
                     "`to:` search needs the mail index, which is unavailable. Grant " +
                         "Full Disk Access to this binary, or search by `from:` or " +
                         "`subject:` instead."
                 )
             }
-            throw e
+            throw error
         }
 
         // Walked account by account so every hit knows its account. The old
