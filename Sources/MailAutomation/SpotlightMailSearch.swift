@@ -311,7 +311,7 @@ public struct SpotlightMailSearch: Sendable {
     /// The `mdfind` binary path. Hard-coded because macOS always ships it
     /// at this location and relying on `$PATH` would add an environment
     /// dependency we don't need.
-    static let mdfindURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+    static let mdfindURL = URL(filePath: "/usr/bin/mdfind")
 
     /// Build a `Runner` that spawns the given executable and collects its
     /// stdout. Factored out so tests can point at a non-existent URL to
@@ -361,7 +361,6 @@ public struct SpotlightMailSearch: Sendable {
             // `mdfind` running to completion, holding two GCD threads in the
             // pipe reads, and repeated timeouts piled both up. Killing it
             // closes the pipes, so the reads below reach EOF and return.
-            let child = ChildProcess(task)
             let stdout = await withTaskCancellationHandler {
                 // Read both pipes to EOF off the calling thread before
                 // waiting on exit. Reading to EOF is what lets the child
@@ -378,7 +377,10 @@ public struct SpotlightMailSearch: Sendable {
                 task.waitUntilExit()
                 return stdout
             } onCancel: {
-                child.terminate()
+                // `Process` is `Sendable` and `terminate()` thread-safe.
+                if task.isRunning {
+                    task.terminate()
+                }
             }
             try Task.checkCancellation()
 
@@ -392,18 +394,6 @@ public struct SpotlightMailSearch: Sendable {
             // Lossy conversion, not `?? ""`: a byte the decoder dislikes
             // must not turn a full read into a silent zero-result success.
             return String(decoding: stdout.data, as: UTF8.self)
-        }
-    }
-
-    /// Lets a cancellation handler signal a `Process` it does not own.
-    /// `Process` is thread-safe for `terminate()` but not `Sendable`.
-    private final class ChildProcess: @unchecked Sendable {
-        private let process: Process
-        init(_ process: Process) { self.process = process }
-        func terminate() {
-            if process.isRunning {
-                process.terminate()
-            }
         }
     }
 

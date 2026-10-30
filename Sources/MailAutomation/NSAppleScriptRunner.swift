@@ -1,12 +1,5 @@
 import Foundation
 
-#if canImport(OSAKit)
-import OSAKit
-#else
-// `NSAppleScript` is declared in Foundation/CoreServices on macOS; no
-// explicit import needed beyond Foundation for the bridged API.
-#endif
-
 /// Production `AppleScriptRunner` backed by `NSAppleScript`, executed on
 /// the **main thread** via ``onMainThread(_:)``.
 ///

@@ -50,9 +50,9 @@ struct MailIndexStoreSafetyTests {
         // leaves one: convert to WAL, commit a row, copy the files while the
         // writer still holds them (so its close-time checkpoint never lands
         // in the copy).
-        let snapDir = fixture.dir.appendingPathComponent("snapshot")
+        let snapDir = fixture.dir.appending(path: "snapshot")
         try FileManager.default.createDirectory(at: snapDir, withIntermediateDirectories: true)
-        let snapIndex = snapDir.appendingPathComponent("Envelope Index").path
+        let snapIndex = snapDir.appending(path: "Envelope Index").path
         do {
             let writer = try Self.open(fixture.indexPath)
             defer { sqlite3_close_v2(writer) }

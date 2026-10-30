@@ -196,7 +196,7 @@ struct SpotlightMailSearchTests {
     @Test("process runner throws when the executable can't be launched")
     func processRunnerLaunchFailureThrows() async throws {
         let runner = SpotlightMailSearch.makeProcessRunner(
-            executableURL: URL(fileURLWithPath: "/definitely/not/a/binary-\(UUID().uuidString)")
+            executableURL: URL(filePath: "/definitely/not/a/binary-\(UUID().uuidString)")
         )
         await #expect(throws: (any Error).self) {
             _ = try await runner(["-help"])
@@ -264,7 +264,7 @@ struct SpotlightMailSearchTests {
         defer { try? FileManager.default.removeItem(at: file) }
 
         let runner = SpotlightMailSearch.makeProcessRunner(
-            executableURL: URL(fileURLWithPath: "/bin/cat"), maxOutputBytes: 64
+            executableURL: URL(filePath: "/bin/cat"), maxOutputBytes: 64
         )
         await #expect(throws: MailServiceError.self) {
             _ = try await runner([file.path])
@@ -286,7 +286,7 @@ struct SpotlightMailSearchTests {
         defer { try? FileManager.default.removeItem(at: file) }
 
         let runner = SpotlightMailSearch.makeProcessRunner(
-            executableURL: URL(fileURLWithPath: "/bin/cat"), maxOutputBytes: 256
+            executableURL: URL(filePath: "/bin/cat"), maxOutputBytes: 256
         )
         await #expect(throws: MailServiceError.self) {
             _ = try await runner([file.path])
@@ -300,7 +300,7 @@ struct SpotlightMailSearchTests {
         defer { try? FileManager.default.removeItem(at: file) }
 
         let runner = SpotlightMailSearch.makeProcessRunner(
-            executableURL: URL(fileURLWithPath: "/bin/cat"), maxOutputBytes: 4096
+            executableURL: URL(filePath: "/bin/cat"), maxOutputBytes: 4096
         )
         let out = try await runner([file.path])
         #expect(out == payload)
@@ -313,7 +313,7 @@ struct SpotlightMailSearchTests {
         // left an mdfind and two blocked GCD threads behind.
         let marker = "7.\(Int.random(in: 100_000 ... 999_999))"
         let runner = SpotlightMailSearch.makeProcessRunner(
-            executableURL: URL(fileURLWithPath: "/bin/sleep")
+            executableURL: URL(filePath: "/bin/sleep")
         )
         let started = ContinuousClock.now
         let work = Task { try await runner([marker]) }
@@ -330,7 +330,7 @@ struct SpotlightMailSearchTests {
     /// Whether a process whose command line matches `pattern` is alive.
     private static func processRunning(matching pattern: String) -> Bool {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.executableURL = URL(filePath: "/usr/bin/pgrep")
         p.arguments = ["-f", pattern]
         p.standardOutput = FileHandle.nullDevice
         try? p.run()
@@ -340,8 +340,8 @@ struct SpotlightMailSearchTests {
 
     /// Writes `contents` to a throwaway file and returns its URL.
     private static func tempFile(containing contents: String) throws -> URL {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("spotlight-cap-\(UUID().uuidString).txt")
+        let url = URL.temporaryDirectory
+            .appending(path: "spotlight-cap-\(UUID().uuidString).txt")
         try contents.write(to: url, atomically: true, encoding: .utf8)
         return url
     }

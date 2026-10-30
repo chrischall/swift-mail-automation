@@ -622,8 +622,8 @@ public struct MailService: Sendable {
         }
         // File-based body to avoid AppleScript string-escaping hell for
         // multi-line content. Same trick the Node port uses.
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("apple-mcp-mail-\(UUID().uuidString).txt")
+        let tmp = URL.temporaryDirectory
+            .appending(path: "apple-mcp-mail-\(UUID().uuidString).txt")
         try body.write(to: tmp, atomically: true, encoding: .utf8)
 
         let esc: (String) -> String = { Self.escapeForAppleScript($0) }
@@ -639,7 +639,7 @@ public struct MailService: Sendable {
         let source = """
         tell application "Mail"
             activate
-            set emailBody to read file POSIX file "\(tmp.path)" as «class utf8»
+            set emailBody to read file POSIX file "\(tmp.path(percentEncoded: false))" as «class utf8»
             set newMessage to make new outgoing message with properties {subject:"\(subjectQ)", content:emailBody, visible:false}
             tell newMessage
                 make new to recipient with properties {address:"\(toQ)"}
