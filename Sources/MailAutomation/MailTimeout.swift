@@ -140,19 +140,29 @@ final class MailTimeoutBox<T: Sendable>: Sendable {
 /// running, detached, until whatever it's blocked in returns. That is the
 /// intended trade: it frees the *caller* rather than pretending a
 /// synchronous Apple Event can be aborted.
+///
+/// ## Isolation
+///
+/// The function itself is `nonisolated(nonsending)`: it runs on the caller's
+/// actor only to set up the race and then suspends, which frees that actor.
+/// The work, the timer and `body` are `@concurrent` and never run there.
+/// That is load-bearing: a caller's actor (often the main actor) can be
+/// blocked — by `NSAppleScriptRunner` executing a script on it, for one —
+/// and a timer queued behind that block could not fire until it ended,
+/// which is exactly when a timeout is no longer needed.
 func withTimeout<T: Sendable>(
     seconds: Double,
     operation: String,
-    _ body: @escaping @Sendable () async throws -> T
+    _ body: @escaping @Sendable @concurrent () async throws -> T
 ) async throws -> T {
     let box = MailTimeoutBox<T>()
 
-    let work = Task {
+    let work = Task { @concurrent in
         do { try await box.resume(.success(body())) }
         catch { box.resume(.failure(error)) }
     }
 
-    let timer = Task {
+    let timer = Task { @concurrent in
         // Cancelled (below) once the caller has its answer; a cancelled
         // sleep throws, so a timer that lost the race never reports.
         try await Task.sleep(for: .seconds(seconds))

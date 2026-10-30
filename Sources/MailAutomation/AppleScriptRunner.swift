@@ -6,6 +6,12 @@ import Foundation
 ///
 /// We use `NSAppleScript` instead of spawning `osascript` subprocesses —
 /// one less process per call and no shell-escaping concerns for the source.
+///
+/// The requirements are `nonisolated(nonsending)`: they start on the
+/// caller's actor. `MailService` only ever calls them from `@concurrent`
+/// work, but an implementation that blocks (a subprocess, a synchronous
+/// bridge) should still mark itself `@concurrent` rather than rely on that.
+/// ``NSAppleScriptRunner`` doesn't need to: it hops to the main actor.
 public protocol AppleScriptRunner: Sendable {
     /// Execute `source` and return the scalar result as a string.
     ///

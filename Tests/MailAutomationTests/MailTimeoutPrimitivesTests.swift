@@ -1,5 +1,6 @@
 import Foundation
 @testable import MailAutomation
+import Synchronization
 import Testing
 
 /// Direct coverage of the concurrency primitives behind every timeout path:
@@ -77,6 +78,23 @@ struct MailTimeoutPrimitivesTests {
         await #expect(throws: CancellationError.self) { try await task.value }
     }
 
+    @Test("withTimeout's timer fires while the caller's actor is blocked")
+    func timeoutTimerIgnoresBusyCallerActor() async throws {
+        let fired = try await BlockedCaller().timerLatencyWhileBlocked(
+            timeout: .milliseconds(50), blockFor: .milliseconds(600)
+        )
+        // A timer inheriting the caller's actor would wait out the whole
+        // block (600 ms) before it could cancel the work.
+        #expect(fired < .milliseconds(400), "timer fired after \(fired)")
+    }
+
+    @Test("withTimeout runs its body off the caller's actor")
+    @MainActor
+    func timeoutBodyLeavesCallerActor() async throws {
+        let onMain = try await withTimeout(seconds: 5, operation: "op") { currentThreadIsMain() }
+        #expect(!onMain)
+    }
+
     // MARK: ScriptStartGate
 
     @Test("a gate abandoned before start refuses to begin")
@@ -104,3 +122,34 @@ struct MailTimeoutPrimitivesTests {
         try await finished.waitUntilSettled()
     }
 }
+
+/// An actor that calls `withTimeout` and then, while that call is
+/// suspended, is kept busy by a blocking job queued behind it. Under
+/// `NonisolatedNonsendingByDefault` a nonisolated async function runs on
+/// its caller's actor, so this is the shape that would starve a timer that
+/// inherited the caller's isolation.
+private actor BlockedCaller {
+    func timerLatencyWhileBlocked(timeout: Duration, blockFor: Duration) async throws -> Duration {
+        let start = ContinuousClock.now
+        let cancelledAt = Mutex<ContinuousClock.Instant?>(nil)
+        // Queued on this actor; runs as soon as the call below suspends.
+        Task { self.block(for: blockFor) }
+        _ = try? await withTimeout(seconds: timeout / .seconds(1), operation: "busy") {
+            await withTaskCancellationHandler {
+                try? await Task.sleep(for: .seconds(5))
+            } onCancel: {
+                cancelledAt.withLock { $0 = .now }
+            }
+        }
+        let fired = try #require(cancelledAt.withLock { $0 })
+        return fired - start
+    }
+
+    private func block(for duration: Duration) {
+        usleep(useconds_t(duration / .microseconds(1)))
+    }
+}
+
+/// `Thread.isMainThread` is unavailable from async contexts; read it from a
+/// synchronous one.
+private func currentThreadIsMain() -> Bool { Thread.isMainThread }

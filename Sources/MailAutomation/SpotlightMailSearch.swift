@@ -17,7 +17,10 @@ public struct SpotlightMailSearch: Sendable {
     ///
     /// Implementations receive the argv that would normally be passed to
     /// `mdfind` and return the captured stdout as a single string.
-    public typealias Runner = @Sendable (_ args: [String]) async throws -> String
+    ///
+    /// `@concurrent`, so a runner never executes on its caller's actor: the
+    /// default one launches a process and waits for it to exit.
+    public typealias Runner = @Sendable @concurrent (_ args: [String]) async throws -> String
 
     private let runner: Runner
     private let log: Logger
@@ -65,6 +68,11 @@ public struct SpotlightMailSearch: Sendable {
     /// - Throws: Whatever the injected `Runner` throws — for the default
     ///   runner, this is a `Foundation.Process` launch error (e.g. the
     ///   binary is missing or can't be executed).
+    ///
+    /// `@concurrent` because parsing and sorting up to
+    /// ``defaultMaxOutputBytes`` of `mdfind` output is real work that must
+    /// not land on a caller's actor (often the main actor).
+    @concurrent
     public func search(
         query: MailQuery,
         limit: Int = 20,

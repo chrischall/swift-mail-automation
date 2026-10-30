@@ -672,7 +672,9 @@ public struct MailService: Sendable {
     private func runSend(_ source: String, bodyFile: URL) async throws -> String {
         let gate = ScriptStartGate()
         let runner = runner
-        let work = Task {
+        // `@concurrent`: a runner that blocks must not do so on the caller's
+        // actor while the bound below is waiting to fire.
+        let work = Task { @concurrent in
             defer {
                 try? FileManager.default.removeItem(at: bodyFile)
                 gate.finish()

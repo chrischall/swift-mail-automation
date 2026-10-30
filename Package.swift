@@ -9,6 +9,7 @@ let swiftSettings: [SwiftSetting] = [
     .enableUpcomingFeature("InferIsolatedConformances"),
     .enableUpcomingFeature("ImmutableWeakCaptures"),
     .enableUpcomingFeature("InternalImportsByDefault"),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
     .strictMemorySafety(),
 ]
 
