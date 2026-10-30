@@ -129,8 +129,8 @@ public actor MailIndexReader {
         self.accountsPath = accountsPath
         // Verify access eagerly so callers learn at startup, not on the
         // first user-visible query.
-        let handle = try Self.openHandle(path: path)
-        sqlite3_close_v2(handle)
+        let handle = try unsafe Self.openHandle(path: path)
+        unsafe sqlite3_close_v2(handle)
         accountNames = Self.loadAccountNames(path: accountsPath)
     }
 
@@ -149,12 +149,12 @@ public actor MailIndexReader {
     private static func openHandle(path: String) throws(MailIndexReaderError) -> OpaquePointer {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX
-        let rc = sqlite3_open_v2(path, &handle, flags, nil)
-        guard rc == SQLITE_OK, let handle else {
-            let msg = handle.map { String(cString: sqlite3_errmsg($0)) }
+        let rc = unsafe sqlite3_open_v2(path, &handle, flags, nil)
+        guard rc == SQLITE_OK, let handle = unsafe handle else {
+            let msg = unsafe handle.map { unsafe String(cString: sqlite3_errmsg($0)) }
                 ?? "sqlite3_open_v2 returned \(rc)"
-            if let h = handle {
-                sqlite3_close_v2(h)
+            if let h = unsafe handle {
+                unsafe sqlite3_close_v2(h)
             }
             throw MailIndexReaderError.databaseNotAccessible(
                 "Cannot open \(path): \(msg). On macOS, grant Full Disk Access " +
@@ -165,24 +165,24 @@ public actor MailIndexReader {
         // Mail holds write locks while it commits, and during WAL recovery.
         // Without a busy timeout a lock held for milliseconds fails the
         // query outright with SQLITE_BUSY.
-        sqlite3_busy_timeout(handle, busyTimeoutMilliseconds)
-        guard cmail_sqlite_disable_checkpoint_on_close(handle) == SQLITE_OK else {
-            sqlite3_close_v2(handle)
+        unsafe sqlite3_busy_timeout(handle, busyTimeoutMilliseconds)
+        guard unsafe cmail_sqlite_disable_checkpoint_on_close(handle) == SQLITE_OK else {
+            unsafe sqlite3_close_v2(handle)
             throw MailIndexReaderError.databaseNotAccessible(
                 "Failed to disable checkpoint-on-close on \(path). Refusing to " +
                     "return a handle that could rewrite Mail's index when it closes."
             )
         }
-        let pragmaRC = sqlite3_exec(handle, "PRAGMA query_only = 1", nil, nil, nil)
+        let pragmaRC = unsafe sqlite3_exec(handle, "PRAGMA query_only = 1", nil, nil, nil)
         guard pragmaRC == SQLITE_OK else {
-            let msg = String(cString: sqlite3_errmsg(handle))
-            sqlite3_close_v2(handle)
+            let msg = unsafe String(cString: sqlite3_errmsg(handle))
+            unsafe sqlite3_close_v2(handle)
             throw MailIndexReaderError.databaseNotAccessible(
                 "Failed to set PRAGMA query_only on \(path): \(msg). Refusing to " +
                     "return a writable handle to Mail's index."
             )
         }
-        return handle
+        return unsafe handle
     }
 
     // MARK: - Account names
@@ -196,15 +196,15 @@ public actor MailIndexReader {
     /// here must not stop mail search working.
     private static func loadAccountNames(path: String) -> [String: String] {
         var handle: OpaquePointer?
-        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
-              let db = handle
+        guard unsafe sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let db = unsafe handle
         else {
-            if let h = handle {
-                sqlite3_close_v2(h)
+            if let h = unsafe handle {
+                unsafe sqlite3_close_v2(h)
             }
             return [:]
         }
-        defer { sqlite3_close_v2(db) }
+        defer { unsafe sqlite3_close_v2(db) }
 
         let sql = """
         SELECT a.ZIDENTIFIER,
@@ -214,15 +214,15 @@ public actor MailIndexReader {
         WHERE a.ZIDENTIFIER IS NOT NULL
         """
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
-        defer { sqlite3_finalize(stmt) }
+        guard unsafe sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [:] }
+        defer { unsafe sqlite3_finalize(stmt) }
 
         var out: [String: String] = [:]
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let uuid = sqlite3_column_text(stmt, 0),
-                  let name = sqlite3_column_text(stmt, 1)
+        while unsafe sqlite3_step(stmt) == SQLITE_ROW {
+            guard let uuid = unsafe sqlite3_column_text(stmt, 0),
+                  let name = unsafe sqlite3_column_text(stmt, 1)
             else { continue }
-            out[String(cString: uuid)] = String(cString: name)
+            unsafe out[String(cString: uuid)] = unsafe String(cString: name)
         }
         return out
     }
@@ -508,41 +508,41 @@ public actor MailIndexReader {
         columns: Int,
         transform: ([String?]) -> T
     ) throws(MailIndexReaderError) -> [T] {
-        let db = try Self.openHandle(path: path)
-        defer { sqlite3_close_v2(db) }
+        let db = try unsafe Self.openHandle(path: path)
+        defer { unsafe sqlite3_close_v2(db) }
 
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+        guard unsafe sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw MailIndexReaderError.sqliteError(
-                "prepare failed: \(String(cString: sqlite3_errmsg(db)))"
+                unsafe "prepare failed: \(String(cString: sqlite3_errmsg(db)))"
             )
         }
-        defer { sqlite3_finalize(stmt) }
+        defer { unsafe sqlite3_finalize(stmt) }
 
         // SQLITE_TRANSIENT: SQLite must copy the bytes, since the Swift
         // string backing them is free to die before the step.
-        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        let transient = unsafe unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         for (i, arg) in args.enumerated() {
-            guard sqlite3_bind_text(stmt, Int32(i + 1), arg, -1, transient) == SQLITE_OK else {
+            guard unsafe sqlite3_bind_text(stmt, Int32(i + 1), arg, -1, transient) == SQLITE_OK else {
                 throw MailIndexReaderError.sqliteError(
-                    "bind \(i + 1) failed: \(String(cString: sqlite3_errmsg(db)))"
+                    unsafe "bind \(i + 1) failed: \(String(cString: sqlite3_errmsg(db)))"
                 )
             }
         }
 
         var out: [T] = []
         while true {
-            let rc = sqlite3_step(stmt)
+            let rc = unsafe sqlite3_step(stmt)
             if rc == SQLITE_DONE {
                 break
             }
             guard rc == SQLITE_ROW else {
                 throw MailIndexReaderError.sqliteError(
-                    "step failed: \(String(cString: sqlite3_errmsg(db)))"
+                    unsafe "step failed: \(String(cString: sqlite3_errmsg(db)))"
                 )
             }
             let cols = (0 ..< columns).map { idx -> String? in
-                sqlite3_column_text(stmt, Int32(idx)).map { String(cString: $0) }
+                unsafe sqlite3_column_text(stmt, Int32(idx)).map { unsafe String(cString: $0) }
             }
             out.append(transform(cols))
         }

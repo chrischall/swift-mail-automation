@@ -157,7 +157,7 @@ struct NSAppleScriptRunnerCancellationTests {
         let hook = HookCounter()
         let source = script
         let task = Task { () async throws -> String in
-            withUnsafeCurrentTask { $0?.cancel() }
+            unsafe withUnsafeCurrentTask { unsafe $0?.cancel() }
             return try await runner.run(source: source, beforeExecute: { hook.hit() })
         }
         await #expect(throws: CancellationError.self) { _ = try await task.value }

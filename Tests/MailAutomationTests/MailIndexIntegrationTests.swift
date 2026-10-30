@@ -54,7 +54,7 @@ struct MailIndexIntegrationTests {
         // of query on a 275k-message mailbox — and then returned nothing.
         #expect(elapsed < 5, "index search took \(elapsed)s; expected sub-second")
         #expect(out.count <= 25, "limit was not honoured")
-        print("[integration] \(out.count) results in \(String(format: "%.3f", elapsed))s")
+        print(unsafe "[integration] \(out.count) results in \(String(format: "%.3f", elapsed))s")
     }
 
     @Test("results are strictly newest-first", .enabled(if: enabled))
