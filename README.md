@@ -11,7 +11,7 @@ correctly ordered on large accounts; AppleScript (via `NSAppleScript`)
 handles sending and discovery, with Spotlight (`mdfind`) covering body
 search.
 
-Platform: **macOS 14+**. Pure Swift 6 with strict concurrency. Single
+Platform: **macOS 26+**. Pure Swift 6 with strict concurrency. Single
 dependency: `swift-log`.
 
 ## Install
@@ -213,7 +213,7 @@ The calling process needs:
   Without it, `MailService.withIndexIfAvailable` returns the reason in
   its `indexError`; log it, because the fallbacks are far slower.
 
-On macOS 14+ your binary's `Info.plist` should declare
+Your binary's `Info.plist` should declare
 `NSAppleEventsUsageDescription` and, if you intend to use Spotlight,
 ensure it's granted FDA.
 

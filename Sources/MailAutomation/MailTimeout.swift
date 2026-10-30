@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Timeout bounds applied to Mail.app work.
 ///
@@ -83,40 +84,45 @@ public struct MailTimeouts: Sendable, Equatable {
 /// Holds whichever arrives first — a result before the caller attached its
 /// continuation, or a continuation waiting for a result — and lets exactly
 /// one resume through.
-final class MailTimeoutBox<T: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<T, Error>?
-    private var pending: Result<T, Error>?
-    private var finished = false
-
-    func attach(_ c: CheckedContinuation<T, Error>) {
-        lock.lock()
-        if let pending {
-            finished = true
-            lock.unlock()
-            c.resume(with: pending)
-            return
-        }
-        continuation = c
-        lock.unlock()
+final class MailTimeoutBox<T: Sendable>: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<T, any Error>?
+        var pending: Result<T, any Error>?
+        var finished = false
     }
 
-    func resume(_ result: Result<T, Error>) {
-        lock.lock()
-        guard !finished else { return lock.unlock() }
-        guard let c = continuation else {
-            // The timer can fire as the work returns, so a later producer
-            // must not overwrite the first result.
-            if pending == nil {
-                pending = result
+    private let state = Mutex(State())
+
+    func attach(_ c: CheckedContinuation<T, any Error>) {
+        let pending: Result<T, any Error>? = state.withLock { state in
+            guard let pending = state.pending else {
+                state.continuation = c
+                return nil
             }
-            lock.unlock()
-            return
+            state.finished = true
+            return pending
         }
-        finished = true
-        continuation = nil
-        lock.unlock()
-        c.resume(with: result)
+        if let pending {
+            c.resume(with: pending)
+        }
+    }
+
+    func resume(_ result: Result<T, any Error>) {
+        let waiter: CheckedContinuation<T, any Error>? = state.withLock { state in
+            guard !state.finished else { return nil }
+            guard let c = state.continuation else {
+                // The timer can fire as the work returns, so a later producer
+                // must not overwrite the first result.
+                if state.pending == nil {
+                    state.pending = result
+                }
+                return nil
+            }
+            state.finished = true
+            state.continuation = nil
+            return c
+        }
+        waiter?.resume(with: result)
     }
 }
 
@@ -146,11 +152,13 @@ func withTimeout<T: Sendable>(
         catch { box.resume(.failure(error)) }
     }
 
-    let timer = DispatchWorkItem {
+    let timer = Task {
+        // Cancelled (below) once the caller has its answer; a cancelled
+        // sleep throws, so a timer that lost the race never reports.
+        try await Task.sleep(for: .seconds(seconds))
         box.resume(.failure(MailServiceError.timedOut(operation: operation, seconds: seconds)))
         work.cancel()
     }
-    DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: timer)
     defer { timer.cancel() }
 
     return try await withTaskCancellationHandler {
@@ -169,11 +177,10 @@ func withTimeout<T: Sendable>(
 /// and abandonment are decided under one lock, so exactly one wins: either
 /// the script starts and the caller must await it, or the caller abandons
 /// it and the hook throws, so it never runs.
-final class ScriptStartGate: @unchecked Sendable {
+final class ScriptStartGate: Sendable {
     private enum State { case waiting, started, abandoned }
 
-    private let lock = NSLock()
-    private var state = State.waiting
+    private let state = Mutex(State.waiting)
     /// Resolves when the script starts, or when the work ends without ever
     /// starting (a failure before execution), so a waiter never hangs.
     private let settled = MailTimeoutBox<Void>()
@@ -181,7 +188,7 @@ final class ScriptStartGate: @unchecked Sendable {
     /// The runner's pre-execution hook. Throws `CancellationError` if the
     /// caller abandoned the script first.
     func begin() throws {
-        try lock.withLock {
+        try state.withLock { state throws(CancellationError) in
             guard state == .waiting else { throw CancellationError() }
             state = .started
         }
@@ -196,7 +203,7 @@ final class ScriptStartGate: @unchecked Sendable {
     /// Abandons the script if it hasn't started. Returns `true` when the
     /// script is guaranteed never to run, `false` when it already started.
     func abandon() -> Bool {
-        lock.withLock {
+        state.withLock { state in
             if state == .waiting {
                 state = .abandoned
             }

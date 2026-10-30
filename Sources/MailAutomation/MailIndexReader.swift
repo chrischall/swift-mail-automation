@@ -73,7 +73,8 @@ public enum MailIndexReaderError: Error, Equatable, Sendable {
 ///
 /// ## Schema assumptions
 ///
-/// Targets the Mail schema on macOS 14+ (`~/Library/Mail/V10/`):
+/// Targets the Mail schema in `~/Library/Mail/V10/` (unchanged from macOS 14
+/// through 27):
 /// `messages` joined to `subjects`, `addresses`, `mailboxes`, `recipients`
 /// and `message_global_data` (which carries the RFC `Message-ID` header).
 /// `messages.date_sent` is Unix epoch seconds. If Apple renames these the
@@ -118,7 +119,7 @@ public actor MailIndexReader {
     public init(
         path: String? = MailIndexReader.defaultDatabasePath,
         accountsPath: String = MailIndexReader.defaultAccountsPath
-    ) throws {
+    ) throws(MailIndexReaderError) {
         guard let path else {
             throw MailIndexReaderError.databaseNotAccessible(
                 "No ~/Library/Mail/V*/MailData/Envelope Index found. Is Mail.app configured?"
@@ -145,7 +146,7 @@ public actor MailIndexReader {
     /// pragma and no-checkpoint-on-close together are the guardrail that
     /// keeps a writable handle from ever mutating Mail's index, so either
     /// failing is fatal, never swallowed.
-    private static func openHandle(path: String) throws -> OpaquePointer {
+    private static func openHandle(path: String) throws(MailIndexReaderError) -> OpaquePointer {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX
         let rc = sqlite3_open_v2(path, &handle, flags, nil)
@@ -257,7 +258,7 @@ public actor MailIndexReader {
 
     /// Every account that owns at least one mailbox in the index, by
     /// display name.
-    public func listAccounts() throws -> [String] {
+    public func listAccounts() throws(MailIndexReaderError) -> [String] {
         let rows = try query(
             sql: "SELECT DISTINCT url FROM mailboxes", args: [],
             columns: 1
@@ -273,7 +274,7 @@ public actor MailIndexReader {
     }
 
     /// Mailbox names inside one account, by display name.
-    public func listMailboxes(account: String) throws -> [String] {
+    public func listMailboxes(account: String) throws(MailIndexReaderError) -> [String] {
         let rows = try query(
             sql: "SELECT url FROM mailboxes", args: [], columns: 1
         ) { $0[0] ?? "" }
@@ -313,7 +314,7 @@ public actor MailIndexReader {
         limit: Int = 20,
         offset: Int = 0,
         unreadOnly: Bool = false
-    ) throws -> [EmailMessage] {
+    ) throws(MailIndexReaderError) -> [EmailMessage] {
         try runMessageQuery(
             predicate: mailQuery.sqlPredicate(),
             account: account, mailbox: mailbox, sinceDaysAgo: sinceDaysAgo,
@@ -328,7 +329,7 @@ public actor MailIndexReader {
         mailbox: String? = nil,
         limit: Int = 10,
         offset: Int = 0
-    ) throws -> [EmailMessage] {
+    ) throws(MailIndexReaderError) -> [EmailMessage] {
         try runMessageQuery(
             predicate: ("1=1", []),
             account: account, mailbox: mailbox, sinceDaysAgo: nil,
@@ -368,7 +369,7 @@ public actor MailIndexReader {
         limit: Int,
         offset: Int,
         unreadOnly: Bool
-    ) throws -> [EmailMessage] {
+    ) throws(MailIndexReaderError) -> [EmailMessage] {
         guard limit > 0 else { return [] }
 
         var wheres = ["m.deleted = 0", predicate.sql]
@@ -441,7 +442,7 @@ public actor MailIndexReader {
     /// - Returns: Matching row ids. Empty means "no such account/mailbox",
     ///   which callers turn into an empty result — correct, and distinct
     ///   from a truncated one.
-    private func mailboxRowIDs(account: String?, mailbox: String?) throws -> [Int] {
+    private func mailboxRowIDs(account: String?, mailbox: String?) throws(MailIndexReaderError) -> [Int] {
         let rows = try query(
             sql: "SELECT ROWID, url FROM mailboxes", args: [], columns: 2
         ) { (rowid: Int($0[0] ?? "") ?? -1, url: $0[1] ?? "") }
@@ -506,7 +507,7 @@ public actor MailIndexReader {
         args: [String],
         columns: Int,
         transform: ([String?]) -> T
-    ) throws -> [T] {
+    ) throws(MailIndexReaderError) -> [T] {
         let db = try Self.openHandle(path: path)
         defer { sqlite3_close_v2(db) }
 

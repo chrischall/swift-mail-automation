@@ -220,6 +220,32 @@ public struct SpotlightMailSearch: Sendable {
             .map(\.element.message)
     }
 
+    /// `yyyy-MM-dd HH:mm:ss Z`, then the same without the offset. Built
+    /// once: `Date.ParseStrategy` is a `Sendable` value, unlike the
+    /// `DateFormatter` that used to be allocated per parsed hit. Only ever
+    /// used through `wholeMatch` — see ``parseSpotlightDate(_:)``.
+    private static let spotlightDateStrategies: [Date.ParseStrategy] = {
+        let posix = Locale(identifier: "en_US_POSIX")
+        return [
+            Date.ParseStrategy(
+                format: """
+                \(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) \
+                \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\
+                \(minute: .twoDigits):\(second: .twoDigits) \(timeZone: .iso8601(.short))
+                """,
+                locale: posix, timeZone: .gmt, isLenient: false
+            ),
+            Date.ParseStrategy(
+                format: """
+                \(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) \
+                \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\
+                \(minute: .twoDigits):\(second: .twoDigits)
+                """,
+                locale: posix, timeZone: .gmt, isLenient: false
+            ),
+        ]
+    }()
+
     /// Parses the timestamp `mdfind -attr` prints for
     /// `kMDItemContentCreationDate`, e.g. `2026-04-01 09:00:00 +0000`.
     ///
@@ -230,12 +256,10 @@ public struct SpotlightMailSearch: Sendable {
     static func parseSpotlightDate(_ raw: String) -> Date? {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, trimmed != "(null)" else { return nil }
-        let fmt = DateFormatter()
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = TimeZone(secondsFromGMT: 0)
-        for pattern in ["yyyy-MM-dd HH:mm:ss Z", "yyyy-MM-dd HH:mm:ss"] {
-            fmt.dateFormat = pattern
-            if let d = fmt.date(from: trimmed) {
+        // `wholeMatch`, not `Date(_:strategy:)`: the parse strategy alone
+        // accepts a valid prefix and ignores whatever trails it.
+        for strategy in spotlightDateStrategies {
+            if let d = trimmed.wholeMatch(of: strategy)?.output {
                 return d
             }
         }
@@ -287,7 +311,7 @@ public struct SpotlightMailSearch: Sendable {
     /// The `mdfind` binary path. Hard-coded because macOS always ships it
     /// at this location and relying on `$PATH` would add an environment
     /// dependency we don't need.
-    static let mdfindURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+    static let mdfindURL = URL(filePath: "/usr/bin/mdfind")
 
     /// Build a `Runner` that spawns the given executable and collects its
     /// stdout. Factored out so tests can point at a non-existent URL to
@@ -337,7 +361,6 @@ public struct SpotlightMailSearch: Sendable {
             // `mdfind` running to completion, holding two GCD threads in the
             // pipe reads, and repeated timeouts piled both up. Killing it
             // closes the pipes, so the reads below reach EOF and return.
-            let child = ChildProcess(task)
             let stdout = await withTaskCancellationHandler {
                 // Read both pipes to EOF off the calling thread before
                 // waiting on exit. Reading to EOF is what lets the child
@@ -354,7 +377,10 @@ public struct SpotlightMailSearch: Sendable {
                 task.waitUntilExit()
                 return stdout
             } onCancel: {
-                child.terminate()
+                // `Process` is `Sendable` and `terminate()` thread-safe.
+                if task.isRunning {
+                    task.terminate()
+                }
             }
             try Task.checkCancellation()
 
@@ -368,18 +394,6 @@ public struct SpotlightMailSearch: Sendable {
             // Lossy conversion, not `?? ""`: a byte the decoder dislikes
             // must not turn a full read into a silent zero-result success.
             return String(decoding: stdout.data, as: UTF8.self)
-        }
-    }
-
-    /// Lets a cancellation handler signal a `Process` it does not own.
-    /// `Process` is thread-safe for `terminate()` but not `Sendable`.
-    private final class ChildProcess: @unchecked Sendable {
-        private let process: Process
-        init(_ process: Process) { self.process = process }
-        func terminate() {
-            if process.isRunning {
-                process.terminate()
-            }
         }
     }
 

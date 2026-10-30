@@ -106,7 +106,7 @@ public struct MailService: Sendable {
         runner: any AppleScriptRunner,
         spotlight: SpotlightMailSearch? = SpotlightMailSearch(),
         timeouts: MailTimeouts = .default
-    ) -> (service: MailService, indexError: Error?) {
+    ) -> (service: MailService, indexError: MailIndexReaderError?) {
         do {
             let reader = try MailIndexReader()
             return (
@@ -479,15 +479,15 @@ public struct MailService: Sendable {
         let predicate: String
         do {
             predicate = try parsed.appleScriptPredicate()
-        } catch let e as MailQueryError {
-            if case .unsupportedField = e {
+        } catch {
+            if case .unsupportedField = error {
                 throw MailServiceError.tooBroad(
                     "`to:` search needs the mail index, which is unavailable. Grant " +
                         "Full Disk Access to this binary, or search by `from:` or " +
                         "`subject:` instead."
                 )
             }
-            throw e
+            throw error
         }
 
         // Walked account by account so every hit knows its account. The old
@@ -622,8 +622,8 @@ public struct MailService: Sendable {
         }
         // File-based body to avoid AppleScript string-escaping hell for
         // multi-line content. Same trick the Node port uses.
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("apple-mcp-mail-\(UUID().uuidString).txt")
+        let tmp = URL.temporaryDirectory
+            .appending(path: "apple-mcp-mail-\(UUID().uuidString).txt")
         try body.write(to: tmp, atomically: true, encoding: .utf8)
 
         let esc: (String) -> String = { Self.escapeForAppleScript($0) }
@@ -639,7 +639,7 @@ public struct MailService: Sendable {
         let source = """
         tell application "Mail"
             activate
-            set emailBody to read file POSIX file "\(tmp.path)" as «class utf8»
+            set emailBody to read file POSIX file "\(tmp.path(percentEncoded: false))" as «class utf8»
             set newMessage to make new outgoing message with properties {subject:"\(subjectQ)", content:emailBody, visible:false}
             tell newMessage
                 make new to recipient with properties {address:"\(toQ)"}

@@ -322,6 +322,20 @@ struct MailIndexReaderTests {
         }
     }
 
+    @Test("opening the index throws a MailIndexReaderError the caller needn't cast")
+    func openErrorIsTyped() {
+        do {
+            _ = try MailIndexReader(path: nil)
+            Issue.record("expected a throw")
+        } catch {
+            // `error` is statically `MailIndexReaderError` (typed throws).
+            guard case .databaseNotAccessible = error else {
+                Issue.record("unexpected \(error)")
+                return
+            }
+        }
+    }
+
     @Test("an unreadable accounts DB degrades to UUIDs instead of failing the search")
     func accountsDBOptional() async throws {
         let fixture = try MailIndexFixture(seeds: standardSeeds)

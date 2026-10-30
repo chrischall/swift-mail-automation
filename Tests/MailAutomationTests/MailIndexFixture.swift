@@ -11,8 +11,8 @@ import SQLite3
 /// schema contract the reader depends on.
 struct MailIndexFixture {
     let dir: URL
-    var indexPath: String { dir.appendingPathComponent("Envelope Index").path }
-    var accountsPath: String { dir.appendingPathComponent("Accounts4.sqlite").path }
+    var indexPath: String { dir.appending(path: "Envelope Index").path }
+    var accountsPath: String { dir.appending(path: "Accounts4.sqlite").path }
 
     /// One message to seed.
     struct Seed {
@@ -52,8 +52,8 @@ struct MailIndexFixture {
         seeds: [Seed],
         accounts: [String: String] = ["ACCT-G": "Google", "ACCT-I": "iCloud"]
     ) throws {
-        dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("mail-index-fixture-\(UUID().uuidString)")
+        dir = URL.temporaryDirectory
+            .appending(path: "mail-index-fixture-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try buildIndex(seeds: seeds)
         try buildAccounts(accounts)

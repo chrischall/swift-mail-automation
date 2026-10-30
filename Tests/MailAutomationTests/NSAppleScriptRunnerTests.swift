@@ -1,5 +1,6 @@
 import Foundation
 @testable import MailAutomation
+import Synchronization
 import Testing
 
 /// Unit tests for `NSAppleScriptRunner`.
@@ -130,19 +131,18 @@ struct NSAppleScriptRunnerThreadAffinityTests {
 struct NSAppleScriptRunnerCancellationTests {
     /// Counts calls to the pre-execution hook, which runs on the main
     /// thread immediately before `NSAppleScript` would execute.
-    final class HookCounter: @unchecked Sendable {
-        private let lock = NSLock()
-        private var count = 0
-        private var mainThread = true
+    final class HookCounter: Sendable {
+        private let state = Mutex((count: 0, mainThread: true))
         func hit() {
-            lock.withLock {
-                count += 1
-                mainThread = mainThread && Thread.isMainThread
+            let onMain = Thread.isMainThread
+            state.withLock {
+                $0.count += 1
+                $0.mainThread = $0.mainThread && onMain
             }
         }
 
-        var hits: Int { lock.withLock { count } }
-        var allOnMain: Bool { lock.withLock { mainThread } }
+        var hits: Int { state.withLock { $0.count } }
+        var allOnMain: Bool { state.withLock { $0.mainThread } }
     }
 
     private let script = """
