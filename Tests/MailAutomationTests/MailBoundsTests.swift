@@ -342,11 +342,11 @@ struct MailBoundsTests {
         let fixture = try MailIndexFixture(seeds: [.init(subject: "x marks the spot")])
         let reader = try MailIndexReader(path: fixture.indexPath, accountsPath: fixture.accountsPath)
         var db: OpaquePointer?
-        guard sqlite3_open_v2(fixture.indexPath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+        guard unsafe sqlite3_open_v2(fixture.indexPath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
             throw MailIndexReaderError.sqliteError("fixture open failed")
         }
-        sqlite3_exec(db, "ALTER TABLE message_global_data RENAME TO message_global_data_v2", nil, nil, nil)
-        sqlite3_close_v2(db)
+        unsafe sqlite3_exec(db, "ALTER TABLE message_global_data RENAME TO message_global_data_v2", nil, nil, nil)
+        unsafe sqlite3_close_v2(db)
         return (reader, fixture)
     }
 

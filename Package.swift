@@ -1,6 +1,18 @@
 // swift-tools-version: 6.4
 import PackageDescription
 
+/// Upcoming-language features and checks applied to every Swift target,
+/// tests included, so the library and its tests compile under one dialect.
+let swiftSettings: [SwiftSetting] = [
+    .enableUpcomingFeature("ExistentialAny"),
+    .enableUpcomingFeature("MemberImportVisibility"),
+    .enableUpcomingFeature("InferIsolatedConformances"),
+    .enableUpcomingFeature("ImmutableWeakCaptures"),
+    .enableUpcomingFeature("InternalImportsByDefault"),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+    .strictMemorySafety(),
+]
+
 let package = Package(
     name: "swift-mail-automation",
     platforms: [.macOS("27.2")],
@@ -22,11 +34,13 @@ let package = Package(
             dependencies: [
                 "CMailSQLite",
                 .product(name: "Logging", package: "swift-log"),
-            ]
+            ],
+            swiftSettings: swiftSettings
         ),
         .testTarget(
             name: "MailAutomationTests",
-            dependencies: ["MailAutomation"]
+            dependencies: ["MailAutomation"],
+            swiftSettings: swiftSettings
         ),
     ]
 )

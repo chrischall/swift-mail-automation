@@ -66,10 +66,10 @@ struct MailIndexFixture {
     // MARK: - Building
 
     private func buildIndex(seeds: [Seed]) throws {
-        let db = try open(indexPath)
-        defer { sqlite3_close_v2(db) }
+        let db = try unsafe open(indexPath)
+        defer { unsafe sqlite3_close_v2(db) }
 
-        try exec(db, """
+        try unsafe exec(db, """
         CREATE TABLE subjects (ROWID INTEGER PRIMARY KEY AUTOINCREMENT, subject TEXT NOT NULL);
         CREATE TABLE addresses (ROWID INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL, comment TEXT NOT NULL);
         CREATE TABLE mailboxes (ROWID INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL);
@@ -91,8 +91,8 @@ struct MailIndexFixture {
             if let id = subjectIDs[s] {
                 return id
             }
-            try exec(db, "INSERT INTO subjects (subject) VALUES ('\(esc(s))')")
-            let id = Int(sqlite3_last_insert_rowid(db))
+            try unsafe exec(db, "INSERT INTO subjects (subject) VALUES ('\(esc(s))')")
+            let id = unsafe Int(sqlite3_last_insert_rowid(db))
             subjectIDs[s] = id
             return id
         }
@@ -106,8 +106,8 @@ struct MailIndexFixture {
                 comment = String(s[s.startIndex ..< lt]).trimmingCharacters(in: .whitespaces)
                 address = String(s[s.index(after: lt) ..< gt])
             }
-            try exec(db, "INSERT INTO addresses (address, comment) VALUES ('\(esc(address))', '\(esc(comment))')")
-            let id = Int(sqlite3_last_insert_rowid(db))
+            try unsafe exec(db, "INSERT INTO addresses (address, comment) VALUES ('\(esc(address))', '\(esc(comment))')")
+            let id = unsafe Int(sqlite3_last_insert_rowid(db))
             addressIDs[s] = id
             return id
         }
@@ -115,8 +115,8 @@ struct MailIndexFixture {
             if let id = mailboxIDs[s] {
                 return id
             }
-            try exec(db, "INSERT INTO mailboxes (url) VALUES ('\(esc(s))')")
-            let id = Int(sqlite3_last_insert_rowid(db))
+            try unsafe exec(db, "INSERT INTO mailboxes (url) VALUES ('\(esc(s))')")
+            let id = unsafe Int(sqlite3_last_insert_rowid(db))
             mailboxIDs[s] = id
             return id
         }
@@ -124,18 +124,18 @@ struct MailIndexFixture {
         for (i, seed) in seeds.enumerated() {
             let epoch = Int(Date().addingTimeInterval(-seed.daysAgo * 86400).timeIntervalSince1970)
             let messageID = 1000 + i
-            try exec(db, """
+            try unsafe exec(db, """
             INSERT INTO messages (message_id, sender, subject, date_sent, mailbox, read, deleted)
             VALUES (\(messageID), \(addressID(seed.sender)), \(subjectID(seed.subject)),
                     \(epoch), \(mailboxID(seed.mailboxURL)),
                     \(seed.isRead ? 1 : 0), \(seed.deleted ? 1 : 0))
             """)
-            let rowid = Int(sqlite3_last_insert_rowid(db))
+            let rowid = unsafe Int(sqlite3_last_insert_rowid(db))
             for r in seed.recipients {
-                try exec(db, "INSERT INTO recipients (message, address) VALUES (\(rowid), \(addressID(r)))")
+                try unsafe exec(db, "INSERT INTO recipients (message, address) VALUES (\(rowid), \(addressID(r)))")
             }
             if !seed.rfcID.isEmpty {
-                try exec(db, """
+                try unsafe exec(db, """
                 INSERT INTO message_global_data (message_id, message_id_header)
                 VALUES (\(messageID), '\(esc(seed.rfcID))')
                 """)
@@ -144,9 +144,9 @@ struct MailIndexFixture {
     }
 
     private func buildAccounts(_ accounts: [String: String]) throws {
-        let db = try open(accountsPath)
-        defer { sqlite3_close_v2(db) }
-        try exec(db, """
+        let db = try unsafe open(accountsPath)
+        defer { unsafe sqlite3_close_v2(db) }
+        try unsafe exec(db, """
         CREATE TABLE ZACCOUNT (
             Z_PK INTEGER PRIMARY KEY, ZIDENTIFIER TEXT,
             ZACCOUNTDESCRIPTION TEXT, ZPARENTACCOUNT INTEGER);
@@ -156,12 +156,12 @@ struct MailIndexFixture {
             // Mirror the real shape: the child row carries the UUID with an
             // empty description, the parent carries the display name.
             let parentPK = pk
-            try exec(db, """
+            try unsafe exec(db, """
             INSERT INTO ZACCOUNT (Z_PK, ZIDENTIFIER, ZACCOUNTDESCRIPTION, ZPARENTACCOUNT)
             VALUES (\(parentPK), NULL, '\(esc(name))', NULL)
             """)
             pk += 1
-            try exec(db, """
+            try unsafe exec(db, """
             INSERT INTO ZACCOUNT (Z_PK, ZIDENTIFIER, ZACCOUNTDESCRIPTION, ZPARENTACCOUNT)
             VALUES (\(pk), '\(esc(uuid))', '', \(parentPK))
             """)
@@ -173,20 +173,20 @@ struct MailIndexFixture {
 
     private func open(_ path: String) throws -> OpaquePointer {
         var handle: OpaquePointer?
-        let rc = sqlite3_open_v2(
+        let rc = unsafe sqlite3_open_v2(
             path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil
         )
-        guard rc == SQLITE_OK, let handle else {
+        guard rc == SQLITE_OK, let handle = unsafe handle else {
             throw FixtureError.sqlite("open \(path) failed: rc=\(rc)")
         }
-        return handle
+        return unsafe handle
     }
 
     private func exec(_ db: OpaquePointer, _ sql: String) throws {
         var err: UnsafeMutablePointer<CChar>?
-        guard sqlite3_exec(db, sql, nil, nil, &err) == SQLITE_OK else {
-            let msg = err.map { String(cString: $0) } ?? "unknown"
-            sqlite3_free(err)
+        guard unsafe sqlite3_exec(db, sql, nil, nil, &err) == SQLITE_OK else {
+            let msg = unsafe err.map { unsafe String(cString: $0) } ?? "unknown"
+            unsafe sqlite3_free(err)
             throw FixtureError.sqlite("exec failed: \(msg) — \(sql)")
         }
     }

@@ -88,7 +88,7 @@ public struct NSAppleScriptRunner: AppleScriptRunner {
                 throw AppleScriptError.compile("Failed to construct NSAppleScript")
             }
             var errorInfo: NSDictionary?
-            let descriptor = script.executeAndReturnError(&errorInfo)
+            let descriptor = unsafe script.executeAndReturnError(&errorInfo)
             if let errorInfo {
                 let message = errorInfo[NSAppleScript.errorMessage] as? String
                     ?? errorInfo[NSAppleScript.errorBriefMessage] as? String

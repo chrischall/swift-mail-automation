@@ -11,18 +11,18 @@ struct MailIndexStoreSafetyTests {
 
     private static func open(_ path: String) throws -> OpaquePointer {
         var handle: OpaquePointer?
-        let rc = sqlite3_open_v2(path, &handle, SQLITE_OPEN_READWRITE, nil)
-        guard rc == SQLITE_OK, let handle else {
+        let rc = unsafe sqlite3_open_v2(path, &handle, SQLITE_OPEN_READWRITE, nil)
+        guard rc == SQLITE_OK, let handle = unsafe handle else {
             throw StoreError.sqlite("open \(path): rc=\(rc)")
         }
-        return handle
+        return unsafe handle
     }
 
     private static func exec(_ db: OpaquePointer, _ sql: String) throws {
         var err: UnsafeMutablePointer<CChar>?
-        guard sqlite3_exec(db, sql, nil, nil, &err) == SQLITE_OK else {
-            let msg = err.map { String(cString: $0) } ?? "unknown"
-            sqlite3_free(err)
+        guard unsafe sqlite3_exec(db, sql, nil, nil, &err) == SQLITE_OK else {
+            let msg = unsafe err.map { unsafe String(cString: $0) } ?? "unknown"
+            unsafe sqlite3_free(err)
             throw StoreError.sqlite("\(msg) — \(sql)")
         }
     }
@@ -54,11 +54,11 @@ struct MailIndexStoreSafetyTests {
         try FileManager.default.createDirectory(at: snapDir, withIntermediateDirectories: true)
         let snapIndex = snapDir.appending(path: "Envelope Index").path
         do {
-            let writer = try Self.open(fixture.indexPath)
-            defer { sqlite3_close_v2(writer) }
-            try Self.exec(writer, "PRAGMA journal_mode = WAL")
-            try Self.exec(writer, "PRAGMA wal_autocheckpoint = 0")
-            try Self.exec(writer, """
+            let writer = try unsafe Self.open(fixture.indexPath)
+            defer { unsafe sqlite3_close_v2(writer) }
+            try unsafe Self.exec(writer, "PRAGMA journal_mode = WAL")
+            try unsafe Self.exec(writer, "PRAGMA wal_autocheckpoint = 0")
+            try unsafe Self.exec(writer, """
             INSERT INTO subjects (subject) VALUES ('WAL-only invoice');
             INSERT INTO messages (message_id, sender, subject, date_sent, mailbox, read, deleted)
             VALUES (9999, 1, last_insert_rowid(), \(Int(Date().timeIntervalSince1970) - 60), 1, 1, 0);
@@ -91,9 +91,9 @@ struct MailIndexStoreSafetyTests {
         let fixture = try MailIndexFixture(seeds: [.init(subject: "Quiet invoice")])
         defer { fixture.tearDown() }
         do {
-            let writer = try Self.open(fixture.indexPath)
-            try Self.exec(writer, "PRAGMA journal_mode = WAL")
-            sqlite3_close_v2(writer)
+            let writer = try unsafe Self.open(fixture.indexPath)
+            try unsafe Self.exec(writer, "PRAGMA journal_mode = WAL")
+            unsafe sqlite3_close_v2(writer)
         }
         try? FileManager.default.removeItem(atPath: fixture.indexPath + "-wal")
         try? FileManager.default.removeItem(atPath: fixture.indexPath + "-shm")
@@ -109,14 +109,14 @@ struct MailIndexStoreSafetyTests {
     func seesLaterCommits() async throws {
         let fixture = try MailIndexFixture(seeds: [.init(subject: "First invoice")])
         defer { fixture.tearDown() }
-        let writer = try Self.open(fixture.indexPath)
-        defer { sqlite3_close_v2(writer) }
-        try Self.exec(writer, "PRAGMA journal_mode = WAL")
+        let writer = try unsafe Self.open(fixture.indexPath)
+        defer { unsafe sqlite3_close_v2(writer) }
+        try unsafe Self.exec(writer, "PRAGMA journal_mode = WAL")
 
         let reader = try MailIndexReader(path: fixture.indexPath, accountsPath: fixture.accountsPath)
         #expect(try await reader.search(query: MailQuery.parse("invoice"), sinceDaysAgo: 365).count == 1)
 
-        try Self.exec(writer, """
+        try unsafe Self.exec(writer, """
         INSERT INTO subjects (subject) VALUES ('Second invoice');
         INSERT INTO messages (message_id, sender, subject, date_sent, mailbox, read, deleted)
         VALUES (9998, 1, last_insert_rowid(), \(Int(Date().timeIntervalSince1970) - 60), 1, 1, 0);
@@ -137,13 +137,13 @@ struct MailIndexStoreSafetyTests {
         let reader = try MailIndexReader(path: fixture.indexPath, accountsPath: fixture.accountsPath)
 
         // Rollback-journal fixture: an EXCLUSIVE transaction blocks readers.
-        let locker = try Self.open(fixture.indexPath)
-        try Self.exec(locker, "BEGIN EXCLUSIVE")
-        let lockerBox = UncheckedBox(locker)
+        let locker = try unsafe Self.open(fixture.indexPath)
+        try unsafe Self.exec(locker, "BEGIN EXCLUSIVE")
+        let lockerBox = unsafe UncheckedBox(locker)
         let release = Task.detached {
             try? await Task.sleep(nanoseconds: 300_000_000)
-            sqlite3_exec(lockerBox.value, "COMMIT", nil, nil, nil)
-            sqlite3_close_v2(lockerBox.value)
+            unsafe sqlite3_exec(lockerBox.value, "COMMIT", nil, nil, nil)
+            unsafe sqlite3_close_v2(lockerBox.value)
         }
         defer { release.cancel() }
 
