@@ -33,21 +33,21 @@ struct MailSendOutcomeTests {
         var executed: Int { _executed.withLock { $0 } }
         var bodyFileExistedAtEnd: Bool? { _bodyFileExistedAtEnd.withLock { $0 } }
 
-        func run(source: String) async throws -> String {
+        func run(source: String) async throws(AppleScriptError) -> String {
             try await run(source: source, beforeExecute: {})
         }
 
         func run(
             source: String,
-            beforeExecute: @escaping @Sendable () throws -> Void
-        ) async throws -> String {
+            beforeExecute: @escaping @Sendable () throws(AppleScriptError) -> Void
+        ) async throws(AppleScriptError) -> String {
             // A sleep that ignores cancellation, like a queued main-actor hop.
             let clock = ContinuousClock()
             let until = clock.now.advanced(by: queueDelay)
             while clock.now < until {
                 try? await Task.sleep(for: .milliseconds(5))
             }
-            try Task.checkCancellation()
+            guard !Task.isCancelled else { throw .cancelled }
             try beforeExecute()
             _executed.withLock { $0 += 1 }
             // Execution is synchronous in the real runner: not cancellable.
@@ -80,9 +80,9 @@ struct MailSendOutcomeTests {
         do {
             try await svc.send(to: "a@b.com", subject: "s", body: "b")
             Issue.record("expected a timeout")
-        } catch let e as MailServiceError {
-            guard case let .timedOut(operation, _) = e else {
-                Issue.record("expected .timedOut, got \(e)")
+        } catch {
+            guard case let .timedOut(operation, _) = error else {
+                Issue.record("expected .timedOut, got \(error)")
                 return
             }
             #expect(operation.contains("send"))
@@ -133,7 +133,7 @@ struct MailSendOutcomeTests {
         runner.queueError("Not authorized")
         let svc = MailService(runner: runner, spotlight: nil, timeouts: timeouts)
 
-        await #expect(throws: AppleScriptError.runtime("Not authorized")) {
+        await #expect(throws: MailServiceError.appleScript(.runtime("Not authorized"))) {
             try await svc.send(to: "a@b.com", subject: "s", body: "b")
         }
     }

@@ -27,7 +27,7 @@ final class FakeAppleScriptRunner: AppleScriptRunner, Sendable {
 
     var calls: [String] { state.withLock { $0.calls } }
 
-    func run(source: String) async throws -> String {
+    func run(source: String) async throws(AppleScriptError) -> String {
         let r = state.withLock { state in
             state.calls.append(source)
             return state.responses.isEmpty ? state.defaultResponse : state.responses.removeFirst()

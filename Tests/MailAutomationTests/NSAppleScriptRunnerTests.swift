@@ -160,7 +160,7 @@ struct NSAppleScriptRunnerCancellationTests {
             unsafe withUnsafeCurrentTask { unsafe $0?.cancel() }
             return try await runner.run(source: source, beforeExecute: { hook.hit() })
         }
-        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        await #expect(throws: AppleScriptError.cancelled) { _ = try await task.value }
         #expect(hook.hits == 0)
     }
 
@@ -180,7 +180,7 @@ struct NSAppleScriptRunnerCancellationTests {
         try await Task.sleep(for: .milliseconds(100))
         queued.cancel()
 
-        await #expect(throws: CancellationError.self) { _ = try await queued.value }
+        await #expect(throws: AppleScriptError.cancelled) { _ = try await queued.value }
         await busy.value
         #expect(hook.hits == 0, "a script whose caller timed out must not run later")
     }
@@ -200,8 +200,8 @@ struct NSAppleScriptRunnerCancellationTests {
     @Test("a hook that throws stops the script and its error reaches the caller")
     func throwingHookStopsScript() async {
         let runner = NSAppleScriptRunner()
-        await #expect(throws: CancellationError.self) {
-            _ = try await runner.run(source: script, beforeExecute: { throw CancellationError() })
+        await #expect(throws: AppleScriptError.cancelled) {
+            _ = try await runner.run(source: script, beforeExecute: { () throws(AppleScriptError) in throw .cancelled })
         }
     }
 }

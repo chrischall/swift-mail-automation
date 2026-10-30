@@ -1,7 +1,25 @@
 import Foundation
 import Logging
 
-/// Errors surfaced by `MailService` operations.
+/// The one error type every public `MailService` operation throws.
+///
+/// Every `MailService` method is declared `throws(MailServiceError)`, so a
+/// `catch` sees this type statically — no `as` cast, and an exhaustive
+/// `switch` is checked by the compiler. Errors from the layers underneath are
+/// wrapped, not erased: the AppleScript runner's ``AppleScriptError``, the
+/// query parser's ``MailQueryError`` and the index reader's
+/// ``MailIndexReaderError`` each keep their own case and payload.
+///
+/// Migrating from the untyped API (2.x):
+///
+/// | 2.x catch                             | now                                   |
+/// |---------------------------------------|---------------------------------------|
+/// | `catch let e as MailServiceError`     | `catch` (it is the only type)         |
+/// | `catch let e as AppleScriptError`     | `catch .appleScript(let e)`           |
+/// | `catch let e as MailQueryError`       | `catch .query(let e)`                 |
+/// | `catch let e as MailIndexReaderError` | `catch .index(let e)`                 |
+/// | `catch is CancellationError`          | `catch .cancelled`                    |
+/// | anything else (`catch { … }`)         | `catch .systemFailure(let message)`   |
 public enum MailServiceError: Error, Equatable, Sendable {
     /// AppleScript ran but Mail.app reported a non-success result, or the
     /// returned payload couldn't be parsed. The string carries Mail's
@@ -22,6 +40,47 @@ public enum MailServiceError: Error, Equatable, Sendable {
     /// The query would have to scan more than the backend can do safely.
     /// Carries a caller-facing suggestion for narrowing it.
     case tooBroad(String)
+    /// The AppleScript runner failed: Mail not running, Automation
+    /// permission denied, a script-level error (``AppleScriptError/runtime(_:)``),
+    /// or a script that wouldn't compile (``AppleScriptError/compile(_:)``).
+    ///
+    /// Never carries ``AppleScriptError/cancelled``; a runner's cancellation
+    /// is reported as ``cancelled``.
+    case appleScript(AppleScriptError)
+    /// The search string couldn't be parsed — for example an empty query,
+    /// which is refused rather than matching everything.
+    case query(MailQueryError)
+    /// Mail's Envelope Index failed a query the service couldn't fall back
+    /// from: a later page of a listing that began on the index, or a search
+    /// with `forceBackend: .index`.
+    case index(MailIndexReaderError)
+    /// The calling task was cancelled. The operation's script, if it hadn't
+    /// started, was dropped without running.
+    case cancelled
+    /// A failure outside Mail and its index — writing the outgoing body to a
+    /// temporary file, launching `mdfind`, or an error from an injected
+    /// Spotlight runner. Carries the underlying error's localized description.
+    case systemFailure(String)
+
+    /// Wraps a runner error, folding its cancellation into ``cancelled``.
+    public init(_ error: AppleScriptError) {
+        self = error == .cancelled ? .cancelled : .appleScript(error)
+    }
+
+    /// Wraps any error into the case that preserves the most information:
+    /// this package's own error types keep their case and payload,
+    /// `CancellationError` becomes ``cancelled``, and anything else becomes
+    /// ``systemFailure(_:)``.
+    public init(wrapping error: any Error) {
+        switch error {
+        case let e as MailServiceError: self = e
+        case let e as AppleScriptError: self.init(e)
+        case let e as MailQueryError: self = .query(e)
+        case let e as MailIndexReaderError: self = .index(e)
+        case is CancellationError: self = .cancelled
+        default: self = .systemFailure(error.localizedDescription)
+        }
+    }
 }
 
 /// Which search backend to use.
@@ -124,6 +183,15 @@ public struct MailService: Sendable {
     /// Whether the fast index backend is available on this service.
     public var isIndexAvailable: Bool { index != nil }
 
+    /// Runs `source` through the injected runner, wrapping its error.
+    private func runScript(_ source: String) async throws(MailServiceError) -> String {
+        do {
+            return try await runner.run(source: source)
+        } catch {
+            throw MailServiceError(error)
+        }
+    }
+
     // MARK: - Discovery
 
     /// Returns the names of every account configured in Mail.app
@@ -131,13 +199,15 @@ public struct MailService: Sendable {
     /// `account` parameter to `listMailboxes`, `getUnread`, and `search`.
     ///
     /// - Returns: Account names in Mail.app's configured order.
-    /// - Throws: `AppleScriptError.runtime` if Mail is not running or
-    ///   Automation permission is denied.
-    public func listAccounts() async throws -> [String] {
+    /// - Throws: ``MailServiceError/appleScript(_:)`` if Mail is not
+    ///   running or Automation permission is denied;
+    ///   ``MailServiceError/timedOut(operation:seconds:)``;
+    ///   ``MailServiceError/cancelled``.
+    public func listAccounts() async throws(MailServiceError) -> [String] {
         let result = try await withTimeout(
             seconds: timeouts.operationSeconds, operation: "mail accounts"
-        ) {
-            try await runner.run(source: timeouts.bound("""
+        ) { () async throws(MailServiceError) -> String in
+            try await runScript(timeouts.bound("""
             tell application "Mail"
                 set out to ""
                 repeat with a in accounts
@@ -161,18 +231,20 @@ public struct MailService: Sendable {
     ///
     /// - Parameter account: Account name from `listAccounts()`. Must be
     ///   non-empty.
-    /// - Throws: `MailServiceError.invalidInput` if `account` is empty
-    ///   or whitespace-only; `AppleScriptError.runtime` if the account
-    ///   doesn't exist in Mail.
-    public func listMailboxes(account: String) async throws -> [String] {
+    /// - Throws: ``MailServiceError/invalidInput(_:)`` if `account` is
+    ///   empty or whitespace-only; ``MailServiceError/appleScript(_:)`` if
+    ///   the account doesn't exist in Mail;
+    ///   ``MailServiceError/timedOut(operation:seconds:)``;
+    ///   ``MailServiceError/cancelled``.
+    public func listMailboxes(account: String) async throws(MailServiceError) -> [String] {
         guard !account.trimmingCharacters(in: .whitespaces).isEmpty else {
-            throw MailServiceError.invalidInput("account name required")
+            throw .invalidInput("account name required")
         }
         let esc = Self.escapeForAppleScript(account)
         let result = try await withTimeout(
             seconds: timeouts.operationSeconds, operation: "mail mailboxes"
-        ) {
-            try await runner.run(source: timeouts.bound("""
+        ) { () async throws(MailServiceError) -> String in
+            try await runScript(timeouts.bound("""
             tell application "Mail"
                 try
                     set a to first account whose name is "\(esc)"
@@ -212,14 +284,17 @@ public struct MailService: Sendable {
     /// - Returns: Unread messages, each with `isRead == false`. Ordered
     ///   newest-first on the index backend; on the AppleScript fallback the
     ///   order is Mail's own mailbox-iteration order, which is arbitrary.
-    /// - Throws: ``MailIndexReaderError`` when the index fails a page after
-    ///   the first — only the first page falls back to Mail.app, so pages
-    ///   of one listing never mix backends.
+    /// - Throws: ``MailServiceError/index(_:)`` when the index fails a page
+    ///   after the first — only the first page falls back to Mail.app, so
+    ///   pages of one listing never mix backends;
+    ///   ``MailServiceError/appleScript(_:)`` when the Mail.app fallback
+    ///   fails; ``MailServiceError/timedOut(operation:seconds:)`` — never an
+    ///   empty array; ``MailServiceError/cancelled``.
     public func getUnread(
         limit: Int = 10,
         account: String? = nil,
         offset: Int = 0
-    ) async throws -> [EmailMessage] {
+    ) async throws(MailServiceError) -> [EmailMessage] {
         guard limit > 0 else { return [] }
         let maxN = Self.cappedLimit(limit)
         let skip = max(0, offset)
@@ -228,10 +303,14 @@ public struct MailService: Sendable {
             do {
                 return try await withTimeout(
                     seconds: timeouts.operationSeconds, operation: "mail unread (index)"
-                ) {
-                    try await index.unread(account: account, limit: maxN, offset: skip)
+                ) { () async throws(MailServiceError) -> [EmailMessage] in
+                    do throws(MailIndexReaderError) {
+                        return try await index.unread(account: account, limit: maxN, offset: skip)
+                    } catch {
+                        throw .index(error)
+                    }
                 }
-            } catch let error as MailIndexReaderError where skip == 0 {
+            } catch let .index(error) where skip == 0 {
                 // A query error (schema change, a lock outlasting the busy
                 // timeout) is what the AppleScript path below exists for —
                 // on the first page only. A later page surfaces it: page 1
@@ -297,8 +376,8 @@ public struct MailService: Sendable {
         """
         let raw = try await withTimeout(
             seconds: timeouts.operationSeconds, operation: "mail unread (Mail.app)"
-        ) {
-            try await runner.run(source: timeouts.bound(body))
+        ) { () async throws(MailServiceError) -> String in
+            try await runScript(timeouts.bound(body))
         }
         return Self.parseEmailLines(raw, defaultRead: false)
     }
@@ -345,13 +424,16 @@ public struct MailService: Sendable {
     ///   that makes it unusable in the first place. So on that backend a
     ///   query with more matches than `limit` returns the newest of
     ///   whichever mailboxes Mail walked first, not the newest overall.
-    /// - Throws: ``MailQueryError/empty`` for a query with no terms;
-    ///   ``MailIndexReaderError`` when the index fails a page after the
+    /// - Throws: ``MailServiceError/query(_:)`` for a malformed query —
+    ///   ``MailQueryError/empty`` for one with no terms;
+    ///   ``MailServiceError/index(_:)`` when the index fails a page after the
     ///   first, or when the index backend is forced;
     ///   ``MailServiceError/timedOut(operation:seconds:)`` when a backend
     ///   exceeded its bound — never an empty array;
     ///   ``MailServiceError/tooBroad(_:)`` when the only available backend
-    ///   can't answer the query safely.
+    ///   can't answer the query safely; ``MailServiceError/appleScript(_:)``
+    ///   when the Mail.app backend fails; ``MailServiceError/systemFailure(_:)``
+    ///   when `mdfind` can't be launched; ``MailServiceError/cancelled``.
     public func search(
         query: String,
         limit: Int = MailService.defaultLimit,
@@ -360,11 +442,16 @@ public struct MailService: Sendable {
         sinceDaysAgo: Int = 90,
         offset: Int = 0,
         forceBackend: SearchBackend? = nil
-    ) async throws -> [EmailMessage] {
+    ) async throws(MailServiceError) -> [EmailMessage] {
         guard limit > 0 else { return [] }
         // Parse first: a malformed or empty query must fail as a query
         // problem, before any backend spends time on it.
-        let parsed = try MailQuery.parse(query)
+        let parsed: MailQuery
+        do {
+            parsed = try MailQuery.parse(query)
+        } catch {
+            throw .query(error)
+        }
         let maxN = Self.cappedLimit(limit)
         let skip = max(0, offset)
         let scoped = account?.isEmpty == false || mailbox?.isEmpty == false
@@ -375,13 +462,17 @@ public struct MailService: Sendable {
                 do {
                     return try await withTimeout(
                         seconds: timeouts.operationSeconds, operation: "mail search (index)"
-                    ) {
-                        try await index.search(
-                            query: parsed, account: account, mailbox: mailbox,
-                            sinceDaysAgo: sinceDaysAgo, limit: maxN, offset: skip
-                        )
+                    ) { () async throws(MailServiceError) -> [EmailMessage] in
+                        do throws(MailIndexReaderError) {
+                            return try await index.search(
+                                query: parsed, account: account, mailbox: mailbox,
+                                sinceDaysAgo: sinceDaysAgo, limit: maxN, offset: skip
+                            )
+                        } catch {
+                            throw .index(error)
+                        }
                     }
-                } catch let error as MailIndexReaderError where forceBackend == nil && skip == 0 {
+                } catch let .index(error) where forceBackend == nil && skip == 0 {
                     // A query error — a schema change, or a lock that
                     // outlasted the busy timeout — must not fail a search
                     // the other backends can still answer. A forced index
@@ -395,7 +486,7 @@ public struct MailService: Sendable {
                 }
             }
             if forceBackend == .index {
-                throw MailServiceError.tooBroad(
+                throw .tooBroad(
                     "The mail index is unavailable, so this query can't be answered " +
                         "quickly. Grant Full Disk Access to this binary in System Settings → " +
                         "Privacy & Security → Full Disk Access."
@@ -424,11 +515,17 @@ public struct MailService: Sendable {
             let (window, overflow) = skip.addingReportingOverflow(maxN)
             let hits = try await withTimeout(
                 seconds: timeouts.operationSeconds, operation: "mail search (spotlight)"
-            ) {
-                try await spotlight.search(
-                    query: parsed, limit: overflow ? Int.max : window,
-                    sinceDaysAgo: sinceDaysAgo
-                )
+            ) { () async throws(MailServiceError) -> [EmailMessage] in
+                // The Spotlight runner is an open extension point, so its
+                // errors are untyped: wrapped here into the one public type.
+                do {
+                    return try await spotlight.search(
+                        query: parsed, limit: overflow ? Int.max : window,
+                        sinceDaysAgo: sinceDaysAgo
+                    )
+                } catch {
+                    throw MailServiceError(wrapping: error)
+                }
             }
             if !hits.isEmpty {
                 return Array(hits.dropFirst(skip).prefix(maxN))
@@ -438,7 +535,7 @@ public struct MailService: Sendable {
             // An empty array is only an answer if Spotlight actually ran.
             // Without one configured it would read as "no matching mail".
             guard spotlight != nil else {
-                throw MailServiceError.tooBroad(
+                throw .tooBroad(
                     "Spotlight search is unavailable in this configuration, so this " +
                         "query can't be answered by it. Search without forcing a backend."
                 )
@@ -472,7 +569,7 @@ public struct MailService: Sendable {
         mailbox: String?,
         sinceDaysAgo: Int,
         offset skip: Int
-    ) async throws -> [EmailMessage] {
+    ) async throws(MailServiceError) -> [EmailMessage] {
         // `to:` has no `whose` equivalent — Mail rejects it with
         // "Can't make … into type to recipient". Fail rather than silently
         // dropping the constraint and returning wrong results.
@@ -481,13 +578,13 @@ public struct MailService: Sendable {
             predicate = try parsed.appleScriptPredicate()
         } catch {
             if case .unsupportedField = error {
-                throw MailServiceError.tooBroad(
+                throw .tooBroad(
                     "`to:` search needs the mail index, which is unavailable. Grant " +
                         "Full Disk Access to this binary, or search by `from:` or " +
                         "`subject:` instead."
                 )
             }
-            throw error
+            throw .query(error)
         }
 
         // Walked account by account so every hit knows its account. The old
@@ -582,8 +679,8 @@ public struct MailService: Sendable {
 
         let raw = try await withTimeout(
             seconds: timeouts.operationSeconds, operation: "mail search (Mail.app)"
-        ) {
-            try await runner.run(source: timeouts.bound(body))
+        ) { () async throws(MailServiceError) -> String in
+            try await runScript(timeouts.bound(body))
         }
         // Mail returns matches in mailbox-iteration order, so sorting is
         // ours to do — the AppleScript surface offers no ordering at all.
@@ -603,28 +700,36 @@ public struct MailService: Sendable {
     ///   - body: Body text (UTF-8, multi-line OK). Required, non-empty.
     ///   - cc: Optional CC recipient.
     ///   - bcc: Optional BCC recipient.
-    /// - Throws: `MailServiceError.invalidInput` when any required
-    ///   parameter is empty; `MailServiceError.scriptFailure` if Mail
-    ///   doesn't confirm the send; `AppleScriptError.runtime` for a
-    ///   permissions error or Mail not running;
+    /// - Throws: ``MailServiceError/invalidInput(_:)`` when any required
+    ///   parameter is empty; ``MailServiceError/scriptFailure(_:)`` if Mail
+    ///   doesn't confirm the send; ``MailServiceError/appleScript(_:)`` for
+    ///   a permissions error or Mail not running — the message may still
+    ///   have been sent if the error came from the send step itself;
     ///   ``MailServiceError/timedOut(operation:seconds:)`` only when the
     ///   script never started within `sendSeconds` — it is then dropped,
-    ///   so nothing was sent and a retry cannot duplicate the message.
+    ///   so nothing was sent and a retry cannot duplicate the message;
+    ///   ``MailServiceError/cancelled`` likewise only before the script
+    ///   started; ``MailServiceError/systemFailure(_:)`` when the body
+    ///   couldn't be written to its temporary file.
     public func send(
         to: String, subject: String, body: String,
         cc: String? = nil, bcc: String? = nil
-    ) async throws {
+    ) async throws(MailServiceError) {
         guard !to.trimmingCharacters(in: .whitespaces).isEmpty,
               !subject.trimmingCharacters(in: .whitespaces).isEmpty,
               !body.trimmingCharacters(in: .whitespaces).isEmpty
         else {
-            throw MailServiceError.invalidInput("to, subject, and body are all required")
+            throw .invalidInput("to, subject, and body are all required")
         }
         // File-based body to avoid AppleScript string-escaping hell for
         // multi-line content. Same trick the Node port uses.
         let tmp = URL.temporaryDirectory
             .appending(path: "apple-mcp-mail-\(UUID().uuidString).txt")
-        try body.write(to: tmp, atomically: true, encoding: .utf8)
+        do {
+            try body.write(to: tmp, atomically: true, encoding: .utf8)
+        } catch {
+            throw MailServiceError(wrapping: error)
+        }
 
         let esc: (String) -> String = { Self.escapeForAppleScript($0) }
         let subjectQ = esc(subject)
@@ -652,7 +757,7 @@ public struct MailService: Sendable {
         """
         let result = try await runSend(timeouts.bound(source, seconds: Int(timeouts.sendSeconds)), bodyFile: tmp)
         guard result.trimmingCharacters(in: .whitespaces) == "SENT" else {
-            throw MailServiceError.scriptFailure("Mail returned: \(result)")
+            throw .scriptFailure("Mail returned: \(result)")
         }
     }
 
@@ -669,21 +774,28 @@ public struct MailService: Sendable {
     ///
     /// The body file is removed only once the script has finished or been
     /// dropped, never while it may still be read.
-    private func runSend(_ source: String, bodyFile: URL) async throws -> String {
+    private func runSend(_ source: String, bodyFile: URL) async throws(MailServiceError) -> String {
         let gate = ScriptStartGate()
         let runner = runner
         // `@concurrent`: a runner that blocks must not do so on the caller's
-        // actor while the bound below is waiting to fire.
-        let work = Task { @concurrent in
+        // actor while the bound below is waiting to fire. The outcome comes
+        // back as a `Result` because a `Task`'s failure type is untyped.
+        let work = Task { @concurrent () -> Result<String, AppleScriptError> in
             defer {
                 try? FileManager.default.removeItem(at: bodyFile)
                 gate.finish()
             }
-            return try await runner.run(source: source, beforeExecute: { try gate.begin() })
+            do throws(AppleScriptError) {
+                return try await .success(runner.run(source: source, beforeExecute: { () throws(AppleScriptError) in
+                    try gate.begin()
+                }))
+            } catch {
+                return .failure(error)
+            }
         }
         do {
             try await withTimeout(seconds: timeouts.sendSeconds, operation: "mail send") {
-                try await gate.waitUntilSettled()
+                await gate.waitUntilSettled()
             }
         } catch {
             if gate.abandon() {
@@ -692,7 +804,7 @@ public struct MailService: Sendable {
             }
             // It started as the bound expired: its outcome is real, await it.
         }
-        return try await work.value
+        return try await work.value.mapError(MailServiceError.init).get()
     }
 
     // MARK: - Get full message
@@ -729,21 +841,23 @@ public struct MailService: Sendable {
     /// - Returns: The message's full contents.
     /// - Throws: ``MailServiceError/invalidInput(_:)`` for an empty id;
     ///   ``MailServiceError/scriptFailure(_:)`` when no message with that
-    ///   id was found; `AppleScriptError` when Mail isn't running or
-    ///   Automation is denied.
-    public func getMessage(id: String, account: String? = nil) async throws -> MailMessageDetail {
+    ///   id was found; ``MailServiceError/appleScript(_:)`` when Mail isn't
+    ///   running or Automation is denied;
+    ///   ``MailServiceError/timedOut(operation:seconds:)``;
+    ///   ``MailServiceError/cancelled``.
+    public func getMessage(
+        id: String, account: String? = nil
+    ) async throws(MailServiceError) -> MailMessageDetail {
         guard !id.trimmingCharacters(in: .whitespaces).isEmpty else {
-            throw MailServiceError.invalidInput("message id required")
+            throw .invalidInput("message id required")
         }
         let raw = try await withTimeout(
             seconds: timeouts.operationSeconds, operation: "mail get"
-        ) {
-            try await runner.run(
-                source: timeouts.bound(Self.getMessageScript(id: id, account: account))
-            )
+        ) { () async throws(MailServiceError) -> String in
+            try await runScript(timeouts.bound(Self.getMessageScript(id: id, account: account)))
         }
         guard let detail = Self.parseMessageDetail(raw) else {
-            throw MailServiceError.scriptFailure(
+            throw .scriptFailure(
                 "no message found with id \(id)"
             )
         }

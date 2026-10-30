@@ -12,27 +12,27 @@ struct MailTimeoutPrimitivesTests {
 
     @Test("a result that arrives before the continuation is delivered on attach")
     func boxResultBeforeAttach() async throws {
-        let box = MailTimeoutBox<Int>()
+        let box = MailTimeoutBox<Int, MailServiceError>()
         box.resume(.success(1))
-        let value = try await withCheckedThrowingContinuation { box.attach($0) }
+        let value = try await box.outcome().get()
         #expect(value == 1)
     }
 
     @Test("only the first result wins, before or after attach")
     func boxFirstResumeWins() async throws {
-        let early = MailTimeoutBox<Int>()
+        let early = MailTimeoutBox<Int, MailServiceError>()
         early.resume(.success(1))
         early.resume(.success(2))
-        #expect(try await withCheckedThrowingContinuation { early.attach($0) } == 1)
+        #expect(try await early.outcome().get() == 1)
 
-        let late = MailTimeoutBox<Int>()
-        async let value = withCheckedThrowingContinuation { late.attach($0) }
+        let late = MailTimeoutBox<Int, MailServiceError>()
+        async let value = late.outcome()
         // Give the attach a moment to land so the resume takes the
         // continuation path rather than the pending one.
         try await Task.sleep(for: .milliseconds(20))
         late.resume(.success(3))
-        late.resume(.failure(CancellationError()))
-        #expect(try await value == 3)
+        late.resume(.failure(.cancelled))
+        #expect(try await value.get() == 3)
     }
 
     // MARK: withTimeout
@@ -45,9 +45,9 @@ struct MailTimeoutPrimitivesTests {
 
     @Test("withTimeout rethrows the body's own error")
     func timeoutPassesErrorThrough() async {
-        await #expect(throws: AppleScriptError.runtime("boom")) {
-            try await withTimeout(seconds: 5, operation: "op") { () async throws -> Int in
-                throw AppleScriptError.runtime("boom")
+        await #expect(throws: MailServiceError.appleScript(.runtime("boom"))) {
+            try await withTimeout(seconds: 5, operation: "op") { () async throws(MailServiceError) -> Int in
+                throw .appleScript(.runtime("boom"))
             }
         }
     }
@@ -56,7 +56,7 @@ struct MailTimeoutPrimitivesTests {
     func timeoutFreesCaller() async {
         let started = ContinuousClock.now
         await #expect(throws: MailServiceError.timedOut(operation: "slow", seconds: 0.05)) {
-            try await withTimeout(seconds: 0.05, operation: "slow") { () async throws -> Int in
+            try await withTimeout(seconds: 0.05, operation: "slow") { () async throws(MailServiceError) -> Int in
                 // A blocking, cancellation-blind body: the case the
                 // first-resume-wins design exists for.
                 usleep(500_000)
@@ -66,16 +66,16 @@ struct MailTimeoutPrimitivesTests {
         #expect(ContinuousClock.now - started < .milliseconds(400))
     }
 
-    @Test("withTimeout throws CancellationError when the caller is cancelled")
+    @Test("withTimeout throws .cancelled when the caller is cancelled")
     func timeoutHonoursCallerCancellation() async {
         let task = Task {
-            try await withTimeout(seconds: 5, operation: "op") { () async throws -> Int in
-                try await Task.sleep(for: .seconds(5))
+            try await withTimeout(seconds: 5, operation: "op") { () async throws(MailServiceError) -> Int in
+                try? await Task.sleep(for: .seconds(5))
                 return 1
             }
         }
         task.cancel()
-        await #expect(throws: CancellationError.self) { try await task.value }
+        await #expect(throws: MailServiceError.cancelled) { try await task.value }
     }
 
     @Test("withTimeout's timer fires while the caller's actor is blocked")
@@ -101,7 +101,7 @@ struct MailTimeoutPrimitivesTests {
     func gateAbandonBeforeBegin() {
         let gate = ScriptStartGate()
         #expect(gate.abandon())
-        #expect(throws: CancellationError.self) { try gate.begin() }
+        #expect(throws: AppleScriptError.cancelled) { try gate.begin() }
     }
 
     @Test("a gate that has begun cannot be abandoned")
@@ -115,11 +115,11 @@ struct MailTimeoutPrimitivesTests {
     func gateSettles() async throws {
         let begun = ScriptStartGate()
         try begun.begin()
-        try await begun.waitUntilSettled()
+        await begun.waitUntilSettled()
 
         let finished = ScriptStartGate()
         finished.finish()
-        try await finished.waitUntilSettled()
+        await finished.waitUntilSettled()
     }
 }
 

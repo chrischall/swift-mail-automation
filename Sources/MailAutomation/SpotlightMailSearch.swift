@@ -1,5 +1,6 @@
 public import Logging
 import Foundation
+import Synchronization
 
 /// Spotlight-backed mail search. Apple indexes every `.emlx` file in
 /// `~/Library/Mail/` with subject, sender, date, and body — `mdfind` hits
@@ -336,7 +337,17 @@ public struct SpotlightMailSearch: Sendable {
     /// output crosses 64 KB easily on a large mail store.
     ///
     /// Both stdout *and* stderr are drained — an undrained stderr wedges
-    /// the child exactly the same way.
+    /// the child exactly the same way. Draining starts the moment the child
+    /// launches, and the exit is awaited only after both pipes reach EOF.
+    ///
+    /// ## Why nothing here blocks a thread
+    ///
+    /// The pipes are drained by `readabilityHandler`s, which run on
+    /// Foundation's dispatch sources only when bytes are ready, and the exit
+    /// is observed through `terminationHandler`. Neither the caller nor a
+    /// GCD worker sits in a blocking `read()` or `waitUntilExit()`, so a
+    /// slow or hung `mdfind` parks no thread at all.
+    ///
     /// ## Why truncation throws rather than returning what fit
     ///
     /// The sort in ``parseAttrOutput(_:limit:)`` is global over this output,
@@ -357,32 +368,31 @@ public struct SpotlightMailSearch: Sendable {
             let errPipe = Pipe()
             task.standardOutput = outPipe
             task.standardError = errPipe
+            // Installed before launch so an exit that beats the await below
+            // is still recorded.
+            let exited = MailTimeoutBox<Void, Never>()
+            task.terminationHandler = { _ in exited.resume(.success(())) }
 
-            do {
-                try task.run()
-            } catch {
-                throw error
-            }
+            try task.run()
+
+            // Start draining immediately: the child may fill a pipe before
+            // anything below gets to run. Reading to EOF is what lets the
+            // child finish — it continues past the cap even though the
+            // excess is discarded, or the child blocks in write() forever.
+            let out = PipeDrain(outPipe.fileHandleForReading, keeping: maxOutputBytes)
+            let err = PipeDrain(errPipe.fileHandleForReading, keeping: 0)
 
             // A caller that gave up (`withTimeout` cancels its work) kills
             // the child. Otherwise a broad query that outran its bound kept
-            // `mdfind` running to completion, holding two GCD threads in the
-            // pipe reads, and repeated timeouts piled both up. Killing it
-            // closes the pipes, so the reads below reach EOF and return.
+            // `mdfind` running to completion, and repeated timeouts piled
+            // children up. Killing it closes the pipes, so the drains reach
+            // EOF and the exit arrives. None of the waits below is
+            // cancellation-aware, by design: a cancelled runner still returns
+            // only once its child is gone.
             let stdout = await withTaskCancellationHandler {
-                // Read both pipes to EOF off the calling thread before
-                // waiting on exit. Reading to EOF is what lets the child
-                // finish — the read must continue past the cap even though
-                // the excess is discarded, or the child blocks in write()
-                // forever.
-                async let out = Self.readToEnd(
-                    outPipe.fileHandleForReading, keeping: maxOutputBytes
-                )
-                async let err = Self.readToEnd(
-                    errPipe.fileHandleForReading, keeping: 0
-                )
-                let (stdout, _) = await (out, err)
-                task.waitUntilExit()
+                let stdout = await out.result()
+                _ = await err.result()
+                _ = await exited.outcome()
                 return stdout
             } onCancel: {
                 // `Process` is `Sendable` and `terminate()` thread-safe.
@@ -422,31 +432,46 @@ public struct SpotlightMailSearch: Sendable {
         let data: Data
         let truncated: Bool
     }
+}
 
-    /// Reads a file handle to EOF on a background thread, keeping at most
-    /// `keeping` bytes and reporting whether more arrived.
-    ///
-    /// Always reads to EOF regardless of the cap — draining is what lets the
-    /// child exit.
-    private static func readToEnd(
-        _ handle: FileHandle, keeping cap: Int
-    ) async -> CappedRead {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global().async {
-                var kept = Data()
-                var total = 0
-                while true {
-                    let chunk = handle.availableData
-                    if chunk.isEmpty {
-                        break
-                    }
-                    total += chunk.count
-                    if kept.count < cap {
-                        kept.append(chunk.prefix(cap - kept.count))
-                    }
+/// Drains a pipe to EOF without blocking a thread, keeping at most `cap`
+/// bytes and recording whether more arrived.
+///
+/// Draining begins in `init`: the `readabilityHandler` fires on Foundation's
+/// dispatch source whenever bytes are ready, and an empty read is EOF. Always
+/// reads to EOF regardless of the cap — draining is what lets the child exit.
+final class PipeDrain: Sendable {
+    private struct State {
+        var kept = Data()
+        var total = 0
+    }
+
+    private let state = Mutex(State())
+    private let done = MailTimeoutBox<SpotlightMailSearch.CappedRead, Never>()
+
+    init(_ handle: FileHandle, keeping cap: Int) {
+        // Retains `self` until EOF, when the handler clears itself.
+        handle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else {
+                handle.readabilityHandler = nil
+                let read = self.state.withLock {
+                    SpotlightMailSearch.CappedRead(data: $0.kept, truncated: $0.total > cap)
                 }
-                cont.resume(returning: CappedRead(data: kept, truncated: total > cap))
+                self.done.resume(.success(read))
+                return
+            }
+            self.state.withLock { state in
+                state.total += chunk.count
+                if state.kept.count < cap {
+                    state.kept.append(chunk.prefix(cap - state.kept.count))
+                }
             }
         }
+    }
+
+    /// Suspends until EOF, then returns what was kept.
+    func result() async -> SpotlightMailSearch.CappedRead {
+        await done.outcome().get()
     }
 }

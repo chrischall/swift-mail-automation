@@ -81,7 +81,7 @@ struct MailServiceTests {
         // Previously this returned `[]`, which reads to a caller exactly
         // like "no such mail". An empty query is a caller mistake and an
         // unbounded scan, so it is refused before any backend runs.
-        await #expect(throws: MailQueryError.self) {
+        await #expect(throws: MailServiceError.query(.empty)) {
             _ = try await svc.search(query: "   ")
         }
         #expect(runner.calls.isEmpty)
@@ -241,7 +241,7 @@ struct MailServiceTests {
         runner.queueError("Not authorized")
         let svc = MailService(runner: runner)
 
-        await #expect(throws: AppleScriptError.self) {
+        await #expect(throws: MailServiceError.appleScript(.runtime("Not authorized"))) {
             _ = try await svc.getUnread()
         }
     }
@@ -306,9 +306,9 @@ struct MailServiceTests {
         do {
             _ = try await svc.search(query: "invoice", forceBackend: .spotlight)
             Issue.record("expected a tooBroad error")
-        } catch let e as MailServiceError {
-            guard case let .tooBroad(msg) = e else {
-                Issue.record("expected .tooBroad, got \(e)")
+        } catch {
+            guard case let .tooBroad(msg) = error else {
+                Issue.record("expected .tooBroad, got \(error)")
                 return
             }
             #expect(msg.contains("Spotlight"))
@@ -350,7 +350,7 @@ struct MailServiceTests {
         runner.queueError("account not found")
         let svc = MailService(runner: runner)
 
-        await #expect(throws: AppleScriptError.self) {
+        await #expect(throws: MailServiceError.appleScript(.runtime("account not found"))) {
             _ = try await svc.listMailboxes(account: "Nonexistent")
         }
     }
@@ -409,7 +409,7 @@ struct MailServiceTests {
         runner.queueError("Mail not running")
         let svc = MailService(runner: runner)
 
-        await #expect(throws: AppleScriptError.self) {
+        await #expect(throws: MailServiceError.appleScript(.runtime("Mail not running"))) {
             try await svc.send(to: "a@b.com", subject: "s", body: "b")
         }
     }

@@ -42,5 +42,8 @@ let package = Package(
             dependencies: ["MailAutomation"],
             swiftSettings: swiftSettings
         ),
-    ]
+    ],
+    // Already the default for tools 6.4; stated so the dialect doesn't
+    // silently change with a future tools-version bump.
+    swiftLanguageModes: [.v6]
 )
