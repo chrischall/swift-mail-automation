@@ -247,4 +247,14 @@ struct MailQueryTests {
         let q = try MailQuery.parse("to:alice")
         #expect(throws: MailQueryError.self) { _ = try q.appleScriptPredicate() }
     }
+
+    @Test("parse errors are statically MailQueryError, so they match without a cast")
+    func parseErrorIsTyped() {
+        do {
+            _ = try MailQuery.parse("   ")
+            Issue.record("expected a throw")
+        } catch {
+            #expect(error == .empty)
+        }
+    }
 }
