@@ -357,6 +357,31 @@ struct SpotlightMailSearchTests {
         #expect(SpotlightMailSearch.parseSpotlightDate("") == nil)
         #expect(SpotlightMailSearch.parseSpotlightDate("not a date") == nil)
     }
+
+    @Test(
+        "the mdfind timestamp resolves to the exact instant",
+        arguments: [
+            ("2026-08-14 09:00:00 +0000", 1_786_698_000.0),
+            ("2026-08-14 05:00:00 -0400", 1_786_698_000.0),
+            ("2026-08-14 10:30:00 +0130", 1_786_698_000.0),
+            // No offset: mdfind prints UTC, so it is read as UTC.
+            ("2026-08-14 09:00:00", 1_786_698_000.0),
+            ("  2026-08-14 09:00:00 +0000  ", 1_786_698_000.0),
+            // Falls through to ISODate for anything else ISO-shaped.
+            ("2026-08-14T09:00:00Z", 1_786_698_000.0)
+        ]
+    )
+    func dateParsingInstant(raw: String, epoch: Double) {
+        #expect(SpotlightMailSearch.parseSpotlightDate(raw) == Date(timeIntervalSince1970: epoch))
+    }
+
+    @Test(
+        "malformed mdfind timestamps are rejected rather than half-parsed",
+        arguments: ["2026-13-14 09:00:00 +0000", "2026-08-14 09:00:00 junk", "2026-08-14 09:00:00 +0000 junk"]
+    )
+    func dateParsingRejects(raw: String) {
+        #expect(SpotlightMailSearch.parseSpotlightDate(raw) == nil)
+    }
 }
 
 /// Tiny actor used by the integration tests above to capture what the

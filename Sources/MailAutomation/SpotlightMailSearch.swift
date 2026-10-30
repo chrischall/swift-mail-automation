@@ -220,6 +220,32 @@ public struct SpotlightMailSearch: Sendable {
             .map(\.element.message)
     }
 
+    /// `yyyy-MM-dd HH:mm:ss Z`, then the same without the offset. Built
+    /// once: `Date.ParseStrategy` is a `Sendable` value, unlike the
+    /// `DateFormatter` that used to be allocated per parsed hit. Only ever
+    /// used through `wholeMatch` — see ``parseSpotlightDate(_:)``.
+    private static let spotlightDateStrategies: [Date.ParseStrategy] = {
+        let posix = Locale(identifier: "en_US_POSIX")
+        return [
+            Date.ParseStrategy(
+                format: """
+                \(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) \
+                \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\
+                \(minute: .twoDigits):\(second: .twoDigits) \(timeZone: .iso8601(.short))
+                """,
+                locale: posix, timeZone: .gmt, isLenient: false
+            ),
+            Date.ParseStrategy(
+                format: """
+                \(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) \
+                \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\
+                \(minute: .twoDigits):\(second: .twoDigits)
+                """,
+                locale: posix, timeZone: .gmt, isLenient: false
+            ),
+        ]
+    }()
+
     /// Parses the timestamp `mdfind -attr` prints for
     /// `kMDItemContentCreationDate`, e.g. `2026-04-01 09:00:00 +0000`.
     ///
@@ -230,12 +256,10 @@ public struct SpotlightMailSearch: Sendable {
     static func parseSpotlightDate(_ raw: String) -> Date? {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, trimmed != "(null)" else { return nil }
-        let fmt = DateFormatter()
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = TimeZone(secondsFromGMT: 0)
-        for pattern in ["yyyy-MM-dd HH:mm:ss Z", "yyyy-MM-dd HH:mm:ss"] {
-            fmt.dateFormat = pattern
-            if let d = fmt.date(from: trimmed) {
+        // `wholeMatch`, not `Date(_:strategy:)`: the parse strategy alone
+        // accepts a valid prefix and ignores whatever trails it.
+        for strategy in spotlightDateStrategies {
+            if let d = trimmed.wholeMatch(of: strategy)?.output {
                 return d
             }
         }
