@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/chrischall/swift-mail-automation/compare/v2.1.0...v2.1.1) (2026-10-30)
+
+
+### Refactor
+
+* adopt Swift 6.4 upcoming features and strict memory safety ([#77](https://github.com/chrischall/swift-mail-automation/issues/77)) ([ad86def](https://github.com/chrischall/swift-mail-automation/commit/ad86defc11ae1b055c31120c82e3c24c3c197f39))
+
 ## [2.1.0](https://github.com/chrischall/swift-mail-automation/compare/v2.0.0...v2.1.0) (2026-10-30)
 
 
