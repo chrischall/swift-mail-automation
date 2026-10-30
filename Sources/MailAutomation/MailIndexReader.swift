@@ -73,7 +73,8 @@ public enum MailIndexReaderError: Error, Equatable, Sendable {
 ///
 /// ## Schema assumptions
 ///
-/// Targets the Mail schema on macOS 14+ (`~/Library/Mail/V10/`):
+/// Targets the Mail schema in `~/Library/Mail/V10/` (unchanged from macOS 14
+/// through 27):
 /// `messages` joined to `subjects`, `addresses`, `mailboxes`, `recipients`
 /// and `message_global_data` (which carries the RFC `Message-ID` header).
 /// `messages.date_sent` is Unix epoch seconds. If Apple renames these the

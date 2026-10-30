@@ -2,7 +2,7 @@
 # Run:  swiftformat .
 # Lint: swiftformat . --lint
 
---swiftversion 6.0
+--swiftversion 6.4
 --maxwidth 120
 
 # Prefer `case let .foo(x)` over `case .foo(let x)`.
@@ -22,3 +22,11 @@
 # reflow string interpolations in ways that reduce readability — leave
 # that to the author.
 --disable wrap
+
+# --swiftversion 6.4 would switch these on/up. Kept at their pre-bump
+# behaviour: `swiftTestingTestCaseNames` rewrites every `@Test("…")` into a
+# raw-identifier function name, and `--trailing-commas always` adds commas to
+# every multi-line argument/parameter list. Pure churn; opt in deliberately,
+# not as a side effect of a toolchain bump.
+--disable swiftTestingTestCaseNames
+--trailing-commas collections-only
